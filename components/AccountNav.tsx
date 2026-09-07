@@ -75,7 +75,7 @@ export function AccountNav() {
           <Link href="/research">Research</Link>
           <Link href="/materials">Materials</Link>
           <Link href="/resources">Resources</Link>
-          <Link href="/submit">Submit</Link>
+          <Link href="/contribute">Contribute</Link>
           {state === "admin" ? <Link href="/admin">Admin</Link> : <Link href="/my-work">My Work</Link>}
           <button className="nav-button" type="button" onClick={signOut}>Sign Out</button>
         </>

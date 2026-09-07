@@ -31,7 +31,7 @@ export default async function ExperimentsPage() {
           <h1>Experiments</h1>
           <p>{approved ? "Successful, partial, failed, and unexpected outcomes all remain part of the research record." : "Selected public research from Forming Material."}</p>
         </div>
-        {approved ? <Link className="button primary" href="/submit">+ New experiment</Link> : <Link className="button primary" href="/login">Sign In</Link>}
+        {approved ? <Link className="button primary" href="/submit">+ NEW EXPERIMENT</Link> : <Link className="button primary" href="/login">Sign In</Link>}
       </div>
 
       {errorMessage && <div className="notice">{approved ? errorMessage : "Selected research from Forming Material will appear here when released publicly."}</div>}
@@ -40,6 +40,7 @@ export default async function ExperimentsPage() {
         <div className="empty-state">
           <strong>{approved ? "No experiments yet." : "Selected research from Forming Material will appear here when released publicly."}</strong>
           <p>{approved ? "Create FM-001 to test the complete research workflow." : "Sign in or request access to view the working research archive."}</p>
+          {approved && <div className="hero-actions"><Link className="button primary" href="/submit">+ NEW EXPERIMENT</Link></div>}
           {!approved && <div className="hero-actions"><Link className="button primary" href="/login">Sign In</Link><Link className="button" href="/login">Request Research Access</Link></div>}
         </div>
       )}

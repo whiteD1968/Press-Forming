@@ -34,6 +34,7 @@ type Source = {
   notes: string | null;
   status: string | null;
   is_published: boolean | null;
+  added_by?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
 };
@@ -60,6 +61,7 @@ type AtlasEntry = {
   sort_order: number | null;
   status: string | null;
   is_published: boolean | null;
+  created_by?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
   atlas_categories?: AtlasCategory | null;
@@ -83,6 +85,7 @@ type Material = {
   safety_notes: string | null;
   research_notes: string | null;
   status: string | null;
+  created_by?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
 };
@@ -110,6 +113,7 @@ type Product = {
   quantity_in_lab: number | null;
   reorder_level: number | null;
   status: string | null;
+  created_by?: string | null;
   materials?: Pick<Material, "id" | "name"> | null;
   vendors?: { id: string; name: string; website_url: string | null } | null;
   created_at?: string | null;
@@ -132,6 +136,7 @@ type Equipment = {
   operating_notes: string | null;
   safety_notes: string | null;
   status: string | null;
+  created_by?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
 };
@@ -146,7 +151,8 @@ type ExperimentLink = {
   } | null;
 };
 
-const sourceTypes = ["Journal Article", "Conference Paper", "Patent", "Book", "Book Chapter", "Thesis", "Technical Manual", "Historical Object", "Historical Image", "Contemporary Image", "Process Image", "Video", "Website", "Supplier / Manufacturer Page", "Other"];
+const sourceTypes = ["Website", "Video", "Journal Article", "Conference Paper", "Patent", "Book", "Book Chapter", "Thesis", "Technical Manual", "Historical Object", "Historical Image", "Contemporary Image", "Process Image", "Supplier / Manufacturer Page", "Other"];
+const quickSourceTypes = ["Website", "Video", "Journal Article", "Conference Paper", "Patent", "Book", "Book Chapter", "Technical Manual", "Historical Image", "Contemporary Image", "Process Image", "Supplier / Manufacturer Page", "Other"];
 
 async function loadMedia(entityType: string, entityIds: string[]) {
   if (!entityIds.length) return new Map<string, LibraryMedia[]>();
@@ -187,6 +193,15 @@ function DetailPair({ label, value }: { label: string; value: React.ReactNode })
   return <div><span>{label}</span><strong>{value}</strong></div>;
 }
 
+function researchSourceActionLabel(sourceType?: string | null) {
+  const type = String(sourceType || "").toLowerCase();
+  if (type.includes("video")) return "WATCH VIDEO";
+  if (type.includes("journal") || type.includes("conference") || type.includes("thesis") || type.includes("book")) return "OPEN PAPER";
+  if (type.includes("supplier") || type.includes("manufacturer")) return "OPEN MANUFACTURER PAGE";
+  if (type.includes("historical") || type.includes("archive")) return "OPEN ARCHIVE SOURCE";
+  return "OPEN SOURCE";
+}
+
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   if (!children) return null;
   return <section className="detail-section"><p className="section-index">{title}</p>{children}</section>;
@@ -196,12 +211,92 @@ function isApprovedAccess(state?: ResearchAccessState) {
   return state === "researcher" || state === "admin";
 }
 
+function canEditRecord(record: { status?: string | null; added_by?: string | null; created_by?: string | null }, userId: string, role: string) {
+  return role === "admin" || (!!userId && (record.added_by === userId || record.created_by === userId) && isEditableStatus(record.status || "draft"));
+}
+
 function PublicEmptyState() {
   return (
     <div className="empty-state">
       <strong>Selected research from Forming Material will appear here when released publicly.</strong>
       <p>Sign in or request access to view the working research archive.</p>
       <div className="hero-actions"><Link className="button primary" href="/login">Sign In</Link><Link className="button" href="/login">Request Research Access</Link></div>
+    </div>
+  );
+}
+
+function ResearchQuickAdd({ onSaved }: { onSaved?: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [savedId, setSavedId] = useState("");
+  const [message, setMessage] = useState("");
+
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setMessage("");
+    const form = new FormData(event.currentTarget);
+    const supabase = createClient();
+    const { data: auth } = await supabase.auth.getUser();
+    if (!auth.user) {
+      setMessage("Sign in to save research.");
+      setBusy(false);
+      return;
+    }
+    const yearValue = String(form.get("publication_year") || "").trim();
+    const { data, error } = await supabase
+      .from("research_sources")
+      .insert({
+        title: String(form.get("title") || "").trim(),
+        source_type: String(form.get("source_type") || "Website"),
+        url: String(form.get("url") || "").trim(),
+        author: String(form.get("author") || "").trim() || null,
+        publication_year: yearValue ? Number(yearValue) : null,
+        why_it_matters: String(form.get("why_it_matters") || "").trim(),
+        status: "draft",
+        visibility: "internal",
+        is_published: false,
+        added_by: auth.user.id,
+      })
+      .select("id")
+      .single();
+    setBusy(false);
+    if (error || !data) {
+      setMessage(error?.message ?? "Unable to save source.");
+      return;
+    }
+    setSavedId(String(data.id));
+    setMessage("SOURCE SAVED");
+    event.currentTarget.reset();
+    onSaved?.();
+  }
+
+  return (
+    <div className="quick-add">
+      <button className="button" type="button" onClick={() => setOpen((current) => !current)}>QUICK ADD LINK</button>
+      {open && (
+        <form className="form-panel" onSubmit={save}>
+          <div className="form-grid form-grid-3">
+            <label>URL<input name="url" type="url" required /></label>
+            <label>Title<input name="title" required /></label>
+            <label>Source Type<select name="source_type" defaultValue="Website">{quickSourceTypes.map((type) => <option key={type}>{type}</option>)}</select></label>
+            <label>Author / Creator<input name="author" /></label>
+            <label>Year<input name="publication_year" type="number" min="0" max="3000" /></label>
+            <label className="full">Why It Matters<textarea name="why_it_matters" rows={3} required /></label>
+          </div>
+          <div className="submit-bar">
+            <button className="button primary" type="submit" disabled={busy}>Save Draft</button>
+            {message && <span className="form-message">{message}</span>}
+          </div>
+          {savedId && (
+            <div className="hero-actions">
+              <Link className="button" href={`/research/${savedId}`}>View Source</Link>
+              <Link className="button primary" href={`/contribute/research/${savedId}/edit`}>Add More Detail</Link>
+              <button className="button" type="button" onClick={() => { setSavedId(""); setMessage(""); }}>Add Another Source</button>
+            </div>
+          )}
+        </form>
+      )}
     </div>
   );
 }
@@ -271,10 +366,13 @@ export function ResearchLibraryPage({ accessState }: { accessState?: ResearchAcc
 
   return (
     <section className="page-shell">
-      <div className="page-heading">
-        <p className="eyebrow">Research Library</p>
-        <h1>Research</h1>
-        <p>Precedents, principles, supplier knowledge, technical manuals, and process references for press-forming research.</p>
+      <div className="page-heading split-heading">
+        <div>
+          <p className="eyebrow">Research Library</p>
+          <h1>Research</h1>
+          <p>Precedents, principles, supplier knowledge, technical manuals, and process references for press-forming research.</p>
+        </div>
+        {isApprovedAccess(accessState) && <div className="detail-actions"><Link className="button primary" href="/contribute/research/new">+ ADD RESEARCH SOURCE</Link><ResearchQuickAdd /></div>}
       </div>
       <div className="filter-bar">
         <input placeholder="Search title, author, summary, principle" value={query} onChange={(event) => setQuery(event.target.value)} />
@@ -288,7 +386,7 @@ export function ResearchLibraryPage({ accessState }: { accessState?: ResearchAcc
         <button className={viewMode === "index" ? "button primary" : "button secondary"} type="button" onClick={() => { setViewMode("index"); window.localStorage.setItem("research-view-mode", "index"); }}>Index</button>
       </div>
       {message && <div className="notice">{message}</div>}
-      {!message && filtered.length === 0 && (isApprovedAccess(accessState) ? <div className="empty-state"><strong>No research sources yet.</strong><p>Submitted and published research sources will appear here.</p></div> : <PublicEmptyState />)}
+      {!message && filtered.length === 0 && (isApprovedAccess(accessState) ? <div className="empty-state"><strong>NO RESEARCH SOURCES YET</strong><p>Capture papers, videos, websites, historical references, and technical precedents.</p><div className="hero-actions"><ResearchQuickAdd /><Link className="button primary" href="/contribute/research/new">+ ADD FULL RESEARCH SOURCE</Link></div></div> : <PublicEmptyState />)}
       <div className={viewMode === "visual" ? "research-index" : "admin-table"}>
         {filtered.map((item) => (
           <Link href={`/research/${item.id}`} className={viewMode === "visual" ? "research-card" : "library-admin-row"} key={item.id}>
@@ -313,6 +411,8 @@ export function ResearchDetailPage({ id }: { id: string }) {
   const [atlas, setAtlas] = useState<AtlasEntry[]>([]);
   const [experiments, setExperiments] = useState<ExperimentLink[]>([]);
   const [approved, setApproved] = useState(false);
+  const [userId, setUserId] = useState("");
+  const [role, setRole] = useState("");
   const [message, setMessage] = useState("Loading...");
 
   useEffect(() => {
@@ -320,7 +420,9 @@ export function ResearchDetailPage({ id }: { id: string }) {
       const supabase = createClient();
       const { data: auth } = await supabase.auth.getUser();
       if (auth.user) {
-        const { data: profile } = await supabase.from("profiles").select("approval_status, is_active").eq("id", auth.user.id).single();
+        setUserId(auth.user.id);
+        const { data: profile } = await supabase.from("profiles").select("role, approval_status, is_active").eq("id", auth.user.id).single();
+        setRole(profile?.role ?? "");
         setApproved(profile?.approval_status === "approved" && profile.is_active !== false);
       }
       const { data, error } = await supabase.from("research_sources").select("*").eq("id", id).single();
@@ -341,6 +443,7 @@ export function ResearchDetailPage({ id }: { id: string }) {
   }, [id]);
 
   if (!item) return <section className="page-shell narrow-shell"><div className="notice">{message}</div></section>;
+  const canEdit = canEditRecord(item, userId, role);
 
   return (
     <section className="page-shell experiment-detail">
@@ -348,7 +451,10 @@ export function ResearchDetailPage({ id }: { id: string }) {
         <div><p className="eyebrow">{item.source_type || "Research Source"}</p><h1>{item.title}</h1><p className="lede">{item.summary}</p></div>
         <div className="detail-actions">
           <StatusPill status={item.status || (item.is_published ? "published" : "draft")} />
+          {approved && item.url && <SafeLink href={item.url}>{researchSourceActionLabel(item.source_type)}</SafeLink>}
+          {approved && item.file_url && <SafeLink href={item.file_url}>OPEN FILE</SafeLink>}
           {approved && item.citation && <CopyCitationButton citation={item.citation} />}
+          {canEdit && <Link className="button" href={`/contribute/research/${item.id}/edit`}>EDIT</Link>}
         </div>
       </div>
       <div className="facts-grid">
@@ -413,10 +519,13 @@ export function DynamicAtlasPage({ fallback, accessState, allowFallback = false 
 
   return (
     <section className="page-shell">
-      <div className="page-heading">
-        <p className="eyebrow">Research Atlas</p>
-        <h1>Methods, materials, tool systems, and behaviors</h1>
-        <p>The Atlas is an editable knowledge network connecting precedent, principle, tool translation, experiment, and next test.</p>
+      <div className="page-heading split-heading">
+        <div>
+          <p className="eyebrow">Research Atlas</p>
+          <h1>Methods, materials, tool systems, and behaviors</h1>
+          <p>The Atlas is an editable knowledge network connecting precedent, principle, tool translation, experiment, and next test.</p>
+        </div>
+        {isApprovedAccess(accessState) && <Link className="button primary" href="/contribute/atlas/new">+ ADD ATLAS ENTRY</Link>}
       </div>
       {!useFallback && categories.length > 0 && <div className="filter-bar"><input placeholder="Search Atlas entries, principles, relevance" value={query} onChange={(event) => setQuery(event.target.value)} /></div>}
       {useFallback ? (
@@ -447,11 +556,19 @@ export function DynamicAtlasPage({ fallback, accessState, allowFallback = false 
 export function AtlasDetailPage({ id }: { id: string }) {
   const [entry, setEntry] = useState<AtlasEntry | null>(null);
   const [media, setMedia] = useState<LibraryMedia[]>([]);
+  const [userId, setUserId] = useState("");
+  const [role, setRole] = useState("");
   const [message, setMessage] = useState("Loading...");
 
   useEffect(() => {
     async function load() {
       const supabase = createClient();
+      const { data: auth } = await supabase.auth.getUser();
+      if (auth.user) {
+        setUserId(auth.user.id);
+        const { data: profile } = await supabase.from("profiles").select("role").eq("id", auth.user.id).single();
+        setRole(profile?.role ?? "");
+      }
       const { data, error } = await supabase.from("atlas_entries").select("*, atlas_categories(*)").eq("id", id).single();
       if (error || !data) {
         setMessage("RESEARCH ACCESS REQUIRED");
@@ -466,10 +583,11 @@ export function AtlasDetailPage({ id }: { id: string }) {
   }, [id]);
 
   if (!entry) return <section className="page-shell narrow-shell"><div className="notice">{message}</div></section>;
+  const canEdit = canEditRecord(entry, userId, role);
 
   return (
     <section className="page-shell experiment-detail">
-      <div className="detail-head"><div><p className="eyebrow">{entry.atlas_categories?.title || "Atlas Entry"}</p><h1>{entry.title}</h1><p className="lede">{entry.short_description}</p></div><StatusPill status={entry.status || "draft"} /></div>
+      <div className="detail-head"><div><p className="eyebrow">{entry.atlas_categories?.title || "Atlas Entry"}</p><h1>{entry.title}</h1><p className="lede">{entry.short_description}</p></div><div className="detail-actions"><StatusPill status={entry.status || "draft"} />{canEdit && <Link className="button" href={`/contribute/atlas/${entry.id}/edit`}>EDIT</Link>}</div></div>
       <Lineage />
       <MediaGrid items={media} />
       <section className="detail-section grid-2"><div><p className="section-index">Principle</p><p>{entry.principle || "No principle recorded."}</p></div><div><p className="section-index">Research relevance</p><p>{entry.research_relevance || "No relevance recorded."}</p></div></section>
@@ -543,10 +661,10 @@ export function MaterialsPage({ accessState }: { accessState?: ResearchAccessSta
 
   return (
     <section className="page-shell">
-      <div className="page-heading"><p className="eyebrow">Material Library</p><h1>Materials</h1><p>Scientific and fabrication material identities separated from exact purchasable products.</p></div>
+      <div className="page-heading split-heading"><div><p className="eyebrow">Material Library</p><h1>Materials</h1><p>Scientific and fabrication material identities separated from exact purchasable products.</p></div>{isApprovedAccess(accessState) && <Link className="button primary" href="/contribute/materials/new">+ ADD MATERIAL</Link>}</div>
       <div className="filter-bar"><input placeholder="Search materials" value={query} onChange={(event) => setQuery(event.target.value)} /><select value={family} onChange={(event) => setFamily(event.target.value)}><option value="">All families</option>{families.map((item) => <option key={item}>{item}</option>)}</select><select value={grade} onChange={(event) => setGrade(event.target.value)}><option value="">All grades</option>{grades.map((item) => <option key={item}>{item}</option>)}</select></div>
       {message && <div className="notice">{message}</div>}
-      {!message && filtered.length === 0 && (isApprovedAccess(accessState) ? <div className="empty-state"><strong>No materials yet.</strong><p>Material records will appear here after review.</p></div> : <PublicEmptyState />)}
+      {!message && filtered.length === 0 && (isApprovedAccess(accessState) ? <div className="empty-state"><strong>NO MATERIALS YET</strong><p>Begin the material library by documenting a material used or proposed for forming research.</p><div className="hero-actions"><Link className="button primary" href="/contribute/materials/new">+ ADD MATERIAL</Link></div></div> : <PublicEmptyState />)}
       <div className="research-index">{filtered.map((item) => <Link href={`/materials/${item.id}`} className="research-card" key={item.id}>{firstMedia(media, item.id) ? <img loading="lazy" src={firstMedia(media, item.id)} alt={item.name} /> : <div className="media-placeholder">No image</div>}<div><span>{item.material_family || "Material"}</span><h2>{item.name}</h2><small>{[item.alloy_grade, item.temper_condition].filter(Boolean).join(" / ")}</small><p>{item.forming_notes || item.description || "No notes recorded."}</p><b>{[item.thickness_min_mm, item.thickness_max_mm].filter((value) => value !== null).join(" - ")}{item.thickness_min_mm || item.thickness_max_mm ? " mm" : ""}</b></div></Link>)}</div>
     </section>
   );
@@ -558,13 +676,17 @@ export function MaterialDetailPage({ id }: { id: string }) {
   const [products, setProducts] = useState<Product[]>([]);
   const [message, setMessage] = useState("Loading...");
   const [approved, setApproved] = useState(false);
+  const [userId, setUserId] = useState("");
+  const [role, setRole] = useState("");
 
   useEffect(() => {
     async function load() {
       const supabase = createClient();
       const { data: auth } = await supabase.auth.getUser();
       if (auth.user) {
-        const { data: profile } = await supabase.from("profiles").select("approval_status, is_active").eq("id", auth.user.id).single();
+        setUserId(auth.user.id);
+        const { data: profile } = await supabase.from("profiles").select("role, approval_status, is_active").eq("id", auth.user.id).single();
+        setRole(profile?.role ?? "");
         setApproved(profile?.approval_status === "approved" && profile.is_active !== false);
       }
       const { data, error } = await supabase.from("materials").select("*").eq("id", id).single();
@@ -582,9 +704,10 @@ export function MaterialDetailPage({ id }: { id: string }) {
   }, [id]);
 
   if (!item) return <section className="page-shell narrow-shell"><div className="notice">{message}</div></section>;
+  const canEdit = canEditRecord(item, userId, role);
   return (
     <section className="page-shell experiment-detail">
-      <div className="detail-head"><div><p className="eyebrow">Material Identity</p><h1>{item.name}</h1><p className="lede">{item.description}</p></div><div className="detail-actions"><StatusPill status={item.status || "draft"} />{approved && <Link className="button" href={`/contribute/products/new?material=${id}`}>+ ADD PRODUCT FOR THIS MATERIAL</Link>}</div></div>
+      <div className="detail-head"><div><p className="eyebrow">Material Identity</p><h1>{item.name}</h1><p className="lede">{item.description}</p></div><div className="detail-actions"><StatusPill status={item.status || "draft"} />{approved && <Link className="button" href={`/contribute/products/new?material=${id}`}>+ ADD PRODUCT FOR THIS MATERIAL</Link>}{canEdit && <Link className="button" href={`/contribute/materials/${item.id}/edit`}>EDIT</Link>}</div></div>
       <div className="facts-grid"><DetailPair label="Family" value={item.material_family} /><DetailPair label="Grade" value={item.alloy_grade} /><DetailPair label="Temper" value={item.temper_condition} /><DetailPair label="Thickness" value={[item.thickness_min_mm, item.thickness_max_mm].filter((value) => value !== null).join(" - ")} /><DetailPair label="Hardness" value={item.hardness} /><DetailPair label="Shore" value={item.shore_hardness} /></div>
       <MediaGrid items={media} />
       <section className="detail-section grid-2"><div><p className="section-index">Material Properties / Notes</p><p>{item.elastic_modulus_notes || item.description || "No material notes."}</p></div><div><p className="section-index">Forming Behavior</p><p>{item.forming_notes || "No forming notes."}</p></div></section>
@@ -596,13 +719,14 @@ export function MaterialDetailPage({ id }: { id: string }) {
   );
 }
 
-export function ResourcesPage() {
+export function ResourcesPage({ accessState }: { accessState?: ResearchAccessState }) {
+  const approved = isApprovedAccess(accessState);
   const sections = [
-    { code: "01", title: "Products", href: "/resources/products", detail: "Exact purchasable materials, inserts, tooling supplies, and reorder links." },
-    { code: "02", title: "Equipment", href: "/resources/equipment", detail: "Fabrication and measurement hardware used in the research workflow." },
-    { code: "03", title: "Suppliers", href: "/resources/products", detail: "Public supplier names and purchase links surfaced through published products." },
+    { code: "01", title: "Products", href: "/resources/products", addHref: "/contribute/products/new", addLabel: "+ Add Product", detail: "Exact purchasable materials, inserts, tooling supplies, and reorder links." },
+    { code: "02", title: "Equipment", href: "/resources/equipment", addHref: "/contribute/equipment/new", addLabel: "+ Add Equipment", detail: "Fabrication and measurement hardware used in the research workflow." },
+    { code: "03", title: "Suppliers", href: "/resources/products", addHref: "/contribute/vendors/new", addLabel: "+ Add Vendor", detail: "Supplier information connected to exact products and repeatable purchasing." },
   ];
-  return <section className="page-shell"><div className="page-heading"><p className="eyebrow">Fabrication Resources</p><h1>Resources</h1><p>The practical layer connecting experiments to the exact products, hardware, and suppliers needed to repeat the work.</p></div><div className="admin-grid">{sections.map((section) => <Link className="admin-tile" href={section.href} key={section.code}><span>{section.code}</span><strong>{section.title}</strong><small>{section.detail}</small></Link>)}</div></section>;
+  return <section className="page-shell"><div className="page-heading"><p className="eyebrow">Fabrication Resources</p><h1>Resources</h1><p>The practical layer connecting experiments to the exact products, hardware, and suppliers needed to repeat the work.</p></div><div className="admin-grid">{sections.map((section) => <article className="admin-tile" key={section.code}><span>{section.code}</span><strong>{section.title}</strong><small>{section.detail}</small><div className="hero-actions"><Link className="button" href={section.href}>Browse {section.title}</Link>{approved && <Link className="button primary" href={section.addHref}>{section.addLabel}</Link>}</div></article>)}</div></section>;
 }
 
 export function ProductsPage({ accessState }: { accessState?: ResearchAccessState }) {
@@ -627,7 +751,7 @@ export function ProductsPage({ accessState }: { accessState?: ResearchAccessStat
   const vendors = Array.from(new Set(items.map((item) => item.vendors?.name).filter(Boolean) as string[])).sort();
   const filtered = items.filter((item) => [item.product_name, item.manufacturer, item.vendor_sku, item.manufacturer_product_code].join(" ").toLowerCase().includes(query.toLowerCase()) && (!material || item.materials?.name === material) && (!manufacturer || item.manufacturer === manufacturer) && (!vendor || item.vendors?.name === vendor));
 
-  return <section className="page-shell"><div className="page-heading"><p className="eyebrow">Fabrication Resources</p><h1>Products</h1><p>Exact commercial products linked to materials, vendors, dimensions, and reorder URLs.</p></div><div className="filter-bar"><input placeholder="Search products, manufacturer, SKU" value={query} onChange={(event) => setQuery(event.target.value)} /><select value={material} onChange={(event) => setMaterial(event.target.value)}><option value="">All materials</option>{materials.map((item) => <option key={item}>{item}</option>)}</select><select value={manufacturer} onChange={(event) => setManufacturer(event.target.value)}><option value="">All manufacturers</option>{manufacturers.map((item) => <option key={item}>{item}</option>)}</select><select value={vendor} onChange={(event) => setVendor(event.target.value)}><option value="">All vendors</option>{vendors.map((item) => <option key={item}>{item}</option>)}</select></div>{message && <div className="notice">{message}</div>}{!message && filtered.length === 0 && (isApprovedAccess(accessState) ? <div className="empty-state"><strong>No products yet.</strong><p>Product records will appear here after review.</p></div> : <PublicEmptyState />)}<div className="experiment-list">{filtered.map((item) => <Link href={`/resources/products/${item.id}`} className="experiment-row" key={item.id}><div className="experiment-code">{item.vendor_sku || item.manufacturer_product_code || "PRODUCT"}</div><div className="experiment-main"><h2>{item.product_name}</h2><p>{[item.manufacturer, item.materials?.name, item.package_description].filter(Boolean).join(" / ")}</p></div><div className="experiment-meta"><span>{item.vendors?.name || "-"}</span><span>{item.price ? `${item.currency || "USD"} ${item.price}` : "-"}</span><span>{item.price_checked_at ? new Date(item.price_checked_at).toLocaleDateString() : "-"}</span><span>Reorder</span></div></Link>)}</div></section>;
+  return <section className="page-shell"><div className="page-heading split-heading"><div><p className="eyebrow">Fabrication Resources</p><h1>Products</h1><p>Exact commercial products linked to materials, vendors, dimensions, and reorder URLs.</p></div>{isApprovedAccess(accessState) && <div className="detail-actions"><Link className="button primary" href="/contribute/products/new">+ ADD PRODUCT</Link><Link className="button" href="/contribute/vendors/new">+ ADD VENDOR</Link></div>}</div><div className="filter-bar"><input placeholder="Search products, manufacturer, SKU" value={query} onChange={(event) => setQuery(event.target.value)} /><select value={material} onChange={(event) => setMaterial(event.target.value)}><option value="">All materials</option>{materials.map((item) => <option key={item}>{item}</option>)}</select><select value={manufacturer} onChange={(event) => setManufacturer(event.target.value)}><option value="">All manufacturers</option>{manufacturers.map((item) => <option key={item}>{item}</option>)}</select><select value={vendor} onChange={(event) => setVendor(event.target.value)}><option value="">All vendors</option>{vendors.map((item) => <option key={item}>{item}</option>)}</select></div>{message && <div className="notice">{message}</div>}{!message && filtered.length === 0 && (isApprovedAccess(accessState) ? <div className="empty-state"><strong>NO PRODUCTS YET</strong><p>Record exact commercial products so materials can be reordered and experiments reproduced.</p><div className="hero-actions"><Link className="button primary" href="/contribute/products/new">+ ADD PRODUCT</Link><Link className="button" href="/contribute/vendors/new">+ ADD VENDOR</Link></div></div> : <PublicEmptyState />)}<div className="experiment-list">{filtered.map((item) => <Link href={`/resources/products/${item.id}`} className="experiment-row" key={item.id}><div className="experiment-code">{item.vendor_sku || item.manufacturer_product_code || "PRODUCT"}</div><div className="experiment-main"><h2>{item.product_name}</h2><p>{[item.manufacturer, item.materials?.name, item.package_description].filter(Boolean).join(" / ")}</p></div><div className="experiment-meta"><span>{item.vendors?.name || "-"}</span><span>{item.price ? `${item.currency || "USD"} ${item.price}` : "-"}</span><span>{item.price_checked_at ? new Date(item.price_checked_at).toLocaleDateString() : "-"}</span><span>Reorder</span></div></Link>)}</div></section>;
 }
 
 export function ProductDetailPage({ id }: { id: string }) {
@@ -635,11 +759,14 @@ export function ProductDetailPage({ id }: { id: string }) {
   const [media, setMedia] = useState<LibraryMedia[]>([]);
   const [alternatives, setAlternatives] = useState<Product[]>([]);
   const [approved, setApproved] = useState(false);
+  const [userId, setUserId] = useState("");
+  const [role, setRole] = useState("");
   const [message, setMessage] = useState("Loading...");
-  useEffect(() => { async function load() { const supabase = createClient(); const { data: auth } = await supabase.auth.getUser(); if (auth.user) { const { data: profile } = await supabase.from("profiles").select("approval_status, is_active").eq("id", auth.user.id).single(); setApproved(profile?.approval_status === "approved" && profile.is_active !== false); } const { data, error } = await supabase.from("products").select("*, materials(id, name), vendors(id, name, website_url)").eq("id", id).single(); if (error || !data) { setMessage("RESEARCH ACCESS REQUIRED"); return; } setItem(data as Product); setMedia((await loadMedia("product", [id])).get(id) ?? []); const { data: altRows } = await supabase.from("product_alternatives").select("products!product_alternatives_alternative_product_id_fkey(*, materials(id, name), vendors(id, name, website_url))").eq("product_id", id); setAlternatives(((altRows ?? []) as any[]).map((row) => Array.isArray(row.products) ? row.products[0] : row.products).filter(Boolean) as Product[]); setMessage(""); } load(); }, [id]);
+  useEffect(() => { async function load() { const supabase = createClient(); const { data: auth } = await supabase.auth.getUser(); if (auth.user) { setUserId(auth.user.id); const { data: profile } = await supabase.from("profiles").select("role, approval_status, is_active").eq("id", auth.user.id).single(); setRole(profile?.role ?? ""); setApproved(profile?.approval_status === "approved" && profile.is_active !== false); } const { data, error } = await supabase.from("products").select("*, materials(id, name), vendors(id, name, website_url)").eq("id", id).single(); if (error || !data) { setMessage("RESEARCH ACCESS REQUIRED"); return; } setItem(data as Product); setMedia((await loadMedia("product", [id])).get(id) ?? []); const { data: altRows } = await supabase.from("product_alternatives").select("products!product_alternatives_alternative_product_id_fkey(*, materials(id, name), vendors(id, name, website_url))").eq("product_id", id); setAlternatives(((altRows ?? []) as any[]).map((row) => Array.isArray(row.products) ? row.products[0] : row.products).filter(Boolean) as Product[]); setMessage(""); } load(); }, [id]);
   if (!item) return <section className="page-shell narrow-shell"><div className="notice">{message}</div></section>;
   const reorder = approved && typeof item.quantity_in_lab === "number" && typeof item.reorder_level === "number" && item.quantity_in_lab <= item.reorder_level;
-  return <section className="page-shell experiment-detail"><div className="detail-head"><div><p className="eyebrow">Product</p><h1>{item.product_name}</h1><p className="lede">{item.package_description}</p></div><div className="detail-actions"><StatusPill status={item.status || "draft"} />{reorder && <span className="status-pill">REORDER</span>}</div></div><div className="facts-grid"><DetailPair label="Manufacturer" value={item.manufacturer} /><DetailPair label="Material" value={item.materials?.name} /><DetailPair label="Vendor" value={item.vendors?.name} /><DetailPair label="Vendor SKU" value={item.vendor_sku} /><DetailPair label="Price" value={item.price ? `${item.currency || "USD"} ${item.price}` : null} /><DetailPair label="Checked" value={item.price_checked_at ? new Date(item.price_checked_at).toLocaleDateString() : null} /></div><MediaGrid items={media} /><section className="detail-section grid-2"><div><p className="section-index">Nominal dimensions</p><p>{[item.nominal_thickness_mm && `${item.nominal_thickness_mm} mm thick`, item.nominal_width_mm && `${item.nominal_width_mm} mm wide`, item.nominal_length_mm && `${item.nominal_length_mm} mm long`, item.filament_diameter_mm && `${item.filament_diameter_mm} mm filament`].filter(Boolean).join(" / ") || "No dimensions recorded."}</p></div><div><p className="section-index">Links</p><p><SafeLink href={item.product_url}>Purchase / reorder</SafeLink> <SafeLink href={item.manufacturer_url}>Manufacturer</SafeLink> <SafeLink href={item.vendors?.website_url ?? null}>Vendor website</SafeLink></p></div></section>{approved && <section className="detail-section"><p className="section-index">LAB / REORDER</p><div className="facts-grid"><DetailPair label="Quantity in Lab" value={item.quantity_in_lab} /><DetailPair label="Reorder Level" value={item.reorder_level} /><DetailPair label="Vendor" value={item.vendors?.name} /><DetailPair label="Recorded Price" value={item.price ? `${item.currency || "USD"} ${item.price}` : null} /><DetailPair label="Price Checked" value={item.price_checked_at ? new Date(item.price_checked_at).toLocaleDateString() : null} /><DetailPair label="Purchase Link" value={<SafeLink href={item.product_url}>Open link</SafeLink>} /></div></section>}<Related title="Alternative Products" items={alternatives.map((product) => ({ href: `/resources/products/${product.id}`, title: product.product_name, detail: [product.manufacturer, product.materials?.name, product.vendors?.name].filter(Boolean).join(" / ") }))} /><RelatedLinks table="experiment_products" column="product_id" id={id} type="experiment" /></section>;
+  const canEdit = canEditRecord(item, userId, role);
+  return <section className="page-shell experiment-detail"><div className="detail-head"><div><p className="eyebrow">Product</p><h1>{item.product_name}</h1><p className="lede">{item.package_description}</p></div><div className="detail-actions"><StatusPill status={item.status || "draft"} />{reorder && <span className="status-pill">REORDER</span>}{canEdit && <Link className="button" href={`/contribute/products/${item.id}/edit`}>EDIT</Link>}</div></div><div className="facts-grid"><DetailPair label="Manufacturer" value={item.manufacturer} /><DetailPair label="Material" value={item.materials?.name} /><DetailPair label="Vendor" value={item.vendors?.name} /><DetailPair label="Vendor SKU" value={item.vendor_sku} /><DetailPair label="Price" value={item.price ? `${item.currency || "USD"} ${item.price}` : null} /><DetailPair label="Checked" value={item.price_checked_at ? new Date(item.price_checked_at).toLocaleDateString() : null} /></div><MediaGrid items={media} /><section className="detail-section grid-2"><div><p className="section-index">Nominal dimensions</p><p>{[item.nominal_thickness_mm && `${item.nominal_thickness_mm} mm thick`, item.nominal_width_mm && `${item.nominal_width_mm} mm wide`, item.nominal_length_mm && `${item.nominal_length_mm} mm long`, item.filament_diameter_mm && `${item.filament_diameter_mm} mm filament`].filter(Boolean).join(" / ") || "No dimensions recorded."}</p></div><div><p className="section-index">Links</p><p><SafeLink href={item.product_url}>Purchase / reorder</SafeLink> <SafeLink href={item.manufacturer_url}>Manufacturer</SafeLink> <SafeLink href={item.vendors?.website_url ?? null}>Vendor website</SafeLink></p></div></section>{approved && <section className="detail-section"><p className="section-index">LAB / REORDER</p><div className="facts-grid"><DetailPair label="Quantity in Lab" value={item.quantity_in_lab} /><DetailPair label="Reorder Level" value={item.reorder_level} /><DetailPair label="Vendor" value={item.vendors?.name} /><DetailPair label="Recorded Price" value={item.price ? `${item.currency || "USD"} ${item.price}` : null} /><DetailPair label="Price Checked" value={item.price_checked_at ? new Date(item.price_checked_at).toLocaleDateString() : null} /><DetailPair label="Purchase Link" value={<SafeLink href={item.product_url}>Open link</SafeLink>} /></div></section>}<Related title="Alternative Products" items={alternatives.map((product) => ({ href: `/resources/products/${product.id}`, title: product.product_name, detail: [product.manufacturer, product.materials?.name, product.vendors?.name].filter(Boolean).join(" / ") }))} /><RelatedLinks table="experiment_products" column="product_id" id={id} type="experiment" /></section>;
 }
 
 export function EquipmentPage({ accessState }: { accessState?: ResearchAccessState }) {
@@ -647,16 +774,19 @@ export function EquipmentPage({ accessState }: { accessState?: ResearchAccessSta
   const [media, setMedia] = useState(new Map<string, LibraryMedia[]>());
   const [message, setMessage] = useState("Loading...");
   useEffect(() => { async function load() { const supabase = createClient(); const { data, error } = await supabase.from("equipment").select("*").order("name", { ascending: true }).limit(80); if (error) { setMessage(error.message); return; } const equipment = (data ?? []) as Equipment[]; setItems(equipment); setMedia(await loadMedia("equipment", equipment.map((item) => item.id))); setMessage(""); } load(); }, []);
-  return <section className="page-shell"><div className="page-heading"><p className="eyebrow">Fabrication Resources</p><h1>Equipment</h1><p>Fabrication and measurement hardware that shapes, records, and tests the research workflow.</p></div>{message && <div className="notice">{message}</div>}{!message && items.length === 0 && (isApprovedAccess(accessState) ? <div className="empty-state"><strong>No equipment yet.</strong><p>Equipment records will appear here after review.</p></div> : <PublicEmptyState />)}<div className="research-index">{items.map((item) => <Link href={`/resources/equipment/${item.id}`} className="research-card" key={item.id}>{firstMedia(media, item.id) ? <img loading="lazy" src={firstMedia(media, item.id)} alt={item.name} /> : <div className="media-placeholder">No image</div>}<div><span>{item.equipment_type || "Equipment"}</span><h2>{item.name}</h2><small>{[item.manufacturer, item.model].filter(Boolean).join(" / ")}</small><p>{item.description || item.capacity || item.working_envelope || "No description recorded."}</p></div></Link>)}</div></section>;
+  return <section className="page-shell"><div className="page-heading split-heading"><div><p className="eyebrow">Fabrication Resources</p><h1>Equipment</h1><p>Fabrication and measurement hardware that shapes, records, and tests the research workflow.</p></div>{isApprovedAccess(accessState) && <Link className="button primary" href="/contribute/equipment/new">+ ADD EQUIPMENT</Link>}</div>{message && <div className="notice">{message}</div>}{!message && items.length === 0 && (isApprovedAccess(accessState) ? <div className="empty-state"><strong>NO EQUIPMENT YET</strong><p>Document fabrication and measurement equipment used by the lab.</p><div className="hero-actions"><Link className="button primary" href="/contribute/equipment/new">+ ADD EQUIPMENT</Link></div></div> : <PublicEmptyState />)}<div className="research-index">{items.map((item) => <Link href={`/resources/equipment/${item.id}`} className="research-card" key={item.id}>{firstMedia(media, item.id) ? <img loading="lazy" src={firstMedia(media, item.id)} alt={item.name} /> : <div className="media-placeholder">No image</div>}<div><span>{item.equipment_type || "Equipment"}</span><h2>{item.name}</h2><small>{[item.manufacturer, item.model].filter(Boolean).join(" / ")}</small><p>{item.description || item.capacity || item.working_envelope || "No description recorded."}</p></div></Link>)}</div></section>;
 }
 
 export function EquipmentDetailPage({ id }: { id: string }) {
   const [item, setItem] = useState<Equipment | null>(null);
   const [media, setMedia] = useState<LibraryMedia[]>([]);
+  const [userId, setUserId] = useState("");
+  const [role, setRole] = useState("");
   const [message, setMessage] = useState("Loading...");
-  useEffect(() => { async function load() { const supabase = createClient(); const { data, error } = await supabase.from("equipment").select("*").eq("id", id).single(); if (error || !data) { setMessage("RESEARCH ACCESS REQUIRED"); return; } setItem(data as Equipment); setMedia((await loadMedia("equipment", [id])).get(id) ?? []); setMessage(""); } load(); }, [id]);
+  useEffect(() => { async function load() { const supabase = createClient(); const { data: auth } = await supabase.auth.getUser(); if (auth.user) { setUserId(auth.user.id); const { data: profile } = await supabase.from("profiles").select("role").eq("id", auth.user.id).single(); setRole(profile?.role ?? ""); } const { data, error } = await supabase.from("equipment").select("*").eq("id", id).single(); if (error || !data) { setMessage("RESEARCH ACCESS REQUIRED"); return; } setItem(data as Equipment); setMedia((await loadMedia("equipment", [id])).get(id) ?? []); setMessage(""); } load(); }, [id]);
   if (!item) return <section className="page-shell narrow-shell"><div className="notice">{message}</div></section>;
-  return <section className="page-shell experiment-detail"><div className="detail-head"><div><p className="eyebrow">{item.equipment_type || "Equipment"}</p><h1>{item.name}</h1><p className="lede">{item.description}</p></div><StatusPill status={item.status || "draft"} /></div><div className="facts-grid"><DetailPair label="Manufacturer" value={item.manufacturer} /><DetailPair label="Model" value={item.model} /><DetailPair label="Capacity" value={item.capacity} /><DetailPair label="Envelope" value={item.working_envelope} /><DetailPair label="Power" value={item.power_requirements} /></div><MediaGrid items={media} /><section className="detail-section grid-2"><div><p className="section-index">Operating notes</p><p>{item.operating_notes || "No operating notes."}</p></div><div><p className="section-index">Safety notes</p><p>{item.safety_notes || "No safety notes."}</p></div></section><section className="detail-section"><p className="section-index">Links</p><p><SafeLink href={item.manual_url}>Manual</SafeLink> <SafeLink href={item.manufacturer_url}>Manufacturer</SafeLink> <SafeLink href={item.purchase_url}>Purchase</SafeLink></p></section><RelatedLinks table="atlas_entry_equipment" column="equipment_id" id={id} type="atlas" /><RelatedLinks table="experiment_equipment" column="equipment_id" id={id} type="experiment" /></section>;
+  const canEdit = canEditRecord(item, userId, role);
+  return <section className="page-shell experiment-detail"><div className="detail-head"><div><p className="eyebrow">{item.equipment_type || "Equipment"}</p><h1>{item.name}</h1><p className="lede">{item.description}</p></div><div className="detail-actions"><StatusPill status={item.status || "draft"} />{canEdit && <Link className="button" href={`/contribute/equipment/${item.id}/edit`}>EDIT</Link>}</div></div><div className="facts-grid"><DetailPair label="Manufacturer" value={item.manufacturer} /><DetailPair label="Model" value={item.model} /><DetailPair label="Capacity" value={item.capacity} /><DetailPair label="Envelope" value={item.working_envelope} /><DetailPair label="Power" value={item.power_requirements} /></div><MediaGrid items={media} /><section className="detail-section grid-2"><div><p className="section-index">Operating notes</p><p>{item.operating_notes || "No operating notes."}</p></div><div><p className="section-index">Safety notes</p><p>{item.safety_notes || "No safety notes."}</p></div></section><section className="detail-section"><p className="section-index">Links</p><p><SafeLink href={item.manual_url}>Manual</SafeLink> <SafeLink href={item.manufacturer_url}>Manufacturer</SafeLink> <SafeLink href={item.purchase_url}>Purchase</SafeLink></p></section><RelatedLinks table="atlas_entry_equipment" column="equipment_id" id={id} type="atlas" /><RelatedLinks table="experiment_equipment" column="equipment_id" id={id} type="experiment" /></section>;
 }
 
 function RelatedLinks({ table, column, id, type }: { table: string; column: string; id: string; type: "atlas" | "experiment" }) {
@@ -669,9 +799,14 @@ export function ContributePage() {
   const [allowed, setAllowed] = useState(false);
   const [message, setMessage] = useState("Loading...");
   useEffect(() => { async function load() { const supabase = createClient(); const { data: auth } = await supabase.auth.getUser(); if (!auth.user) { setMessage("Sign in to contribute."); return; } const { data: profile } = await supabase.from("profiles").select("approval_status, is_active").eq("id", auth.user.id).single(); if (profile?.approval_status !== "approved" || !profile?.is_active) { setMessage("Approved research access is required to contribute."); return; } setAllowed(true); setMessage(""); } load(); }, []);
-  const links = [["Add Research Source", "/contribute/research/new"], ["Add Atlas Entry", "/contribute/atlas/new"], ["Add Material", "/contribute/materials/new"], ["Add Product", "/contribute/products/new"], ["Add Vendor", "/contribute/vendors/new"], ["Add Equipment", "/contribute/equipment/new"]];
+  const groups = [
+    { code: "01", title: "EXPERIMENT", actions: [{ label: "+ New Experiment", href: "/submit" }] },
+    { code: "02", title: "RESEARCH", actions: [{ label: "+ Full Research Source", href: "/contribute/research/new" }] },
+    { code: "03", title: "KNOWLEDGE", actions: [{ label: "+ Atlas Entry", href: "/contribute/atlas/new" }, { label: "+ Material", href: "/contribute/materials/new" }] },
+    { code: "04", title: "FABRICATION RESOURCES", actions: [{ label: "+ Product", href: "/contribute/products/new" }, { label: "+ Vendor", href: "/contribute/vendors/new" }, { label: "+ Equipment", href: "/contribute/equipment/new" }] },
+  ];
   if (!allowed) return <section className="page-shell narrow-shell"><div className="notice">{message}</div></section>;
-  return <section className="page-shell"><div className="page-heading"><p className="eyebrow">Contribute</p><h1>Contribute to Forming Material</h1><p>Contributions remain editable while Draft or Submitted. Reviewed and Published records become part of the canonical research archive.</p></div><div className="admin-grid">{links.map(([title, href], index) => <Link className="admin-tile" href={href} key={href}><span>{String(index + 1).padStart(2, "0")}</span><strong>+ {title}</strong><small>Draft or submit for review</small></Link>)}</div></section>;
+  return <section className="page-shell"><div className="page-heading"><p className="eyebrow">Contribute</p><h1>CONTRIBUTE</h1><p>Contributions start as internal drafts. Capture first, enrich later, and submit when ready for review.</p></div><div className="admin-grid">{groups.map((group) => <article className="admin-tile" key={group.code}><span>{group.code}</span><strong>{group.title}</strong>{group.title === "RESEARCH" && <ResearchQuickAdd />}<div className="hero-actions">{group.actions.map((action) => <Link className="button primary" href={action.href} key={action.href}>{action.label}</Link>)}</div></article>)}</div></section>;
 }
 
 export function MyWorkPage() {
