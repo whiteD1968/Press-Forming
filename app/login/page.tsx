@@ -18,13 +18,27 @@ export default function LoginPage() {
       const supabase = createClient();
       const result = mode === "signin"
         ? await supabase.auth.signInWithPassword({ email, password })
-        : await supabase.auth.signUp({ email, password });
+        : await supabase.auth.signUp({
+            email,
+            password,
+            options: {
+              emailRedirectTo: `${window.location.origin}/auth/callback`,
+            },
+          });
 
       if (result.error) throw result.error;
-      setMessage(mode === "signin" ? "Signed in. You can now submit experiments." : "Account created. Check your email if confirmation is enabled.");
-      if (mode === "signin") window.location.href = "/submit";
+      if (mode === "signin") {
+        window.location.href = "/submit";
+        return;
+      }
+      setMessage("Account created. Check your email to confirm your account.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Authentication failed.");
+      const message = error instanceof Error ? error.message : "Authentication failed.";
+      setMessage(
+        message.toLowerCase().includes("email rate limit exceeded")
+          ? "The temporary email sending limit has been reached. If your account is already confirmed, use Sign In. Otherwise, wait before requesting another confirmation email."
+          : message
+      );
     } finally {
       setBusy(false);
     }
@@ -43,7 +57,7 @@ export default function LoginPage() {
         <label>Password<input name="password" type="password" required minLength={8} autoComplete="current-password" /></label>
         <div className="form-actions">
           <button className="button primary" type="submit" disabled={busy}>Sign in</button>
-          <button className="button" type="button" disabled={busy} onClick={(event) => {
+          <button className="button secondary" type="button" disabled={busy} onClick={(event) => {
             const form = event.currentTarget.closest("form");
             if (form) authenticate(form, "signup");
           }}>Create account</button>

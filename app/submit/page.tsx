@@ -38,16 +38,19 @@ export default function SubmitPage() {
 
   async function submitExperiment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setMessage("");
+
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
+    const status = submitter?.value === "submitted" ? "submitted" : "draft";
+
+    setMessage("Saving experiment...");
     setBusy(true);
 
     try {
       const supabase = createClient();
       const { data: auth } = await supabase.auth.getUser();
       if (!auth.user) throw new Error("Please sign in before submitting an experiment.");
-
-      const form = new FormData(event.currentTarget);
-      const status = String(form.get("submit_mode") || "draft") === "submitted" ? "submitted" : "draft";
 
       const experimentPayload = {
         researcher_id: auth.user.id,
@@ -88,16 +91,17 @@ export default function SubmitPage() {
 
       if (stageRows.length) {
         const { error } = await supabase.from("experiment_stages").insert(stageRows);
-        if (error) throw error;
+        if (error) throw new Error(`Experiment saved, but stages could not be saved: ${error.message}`);
       }
 
       const files = form.getAll("media").filter((entry): entry is File => entry instanceof File && entry.size > 0);
       for (let index = 0; index < files.length; index++) {
+        setMessage(`Uploading image ${index + 1} of ${files.length}...`);
         const file = files[index];
         const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "-");
         const storagePath = `${experiment.id}/${Date.now()}-${index}-${safeName}`;
         const { error: uploadError } = await supabase.storage.from("experiment-media").upload(storagePath, file, { upsert: false });
-        if (uploadError) throw uploadError;
+        if (uploadError) throw new Error(`Image ${index + 1} could not be uploaded: ${uploadError.message}`);
         const { error: mediaError } = await supabase.from("experiment_media").insert({
           experiment_id: experiment.id,
           storage_path: storagePath,
@@ -106,7 +110,7 @@ export default function SubmitPage() {
           display_order: index,
           created_by: auth.user.id,
         });
-        if (mediaError) throw mediaError;
+        if (mediaError) throw new Error(`Image ${index + 1} uploaded, but media metadata could not be saved: ${mediaError.message}`);
       }
 
       window.location.href = `/experiments/${experiment.id}`;
@@ -185,8 +189,8 @@ export default function SubmitPage() {
         </fieldset>
 
         <div className="submit-bar">
-          <button className="button" name="submit_mode" value="draft" type="submit" disabled={busy}>Save draft</button>
-          <button className="button primary" name="submit_mode" value="submitted" type="submit" disabled={busy}>Submit for review</button>
+          <button className="button" value="draft" type="submit" disabled={busy}>Save Draft</button>
+          <button className="button primary" value="submitted" type="submit" disabled={busy}>Submit for Review</button>
           {message && <span className="form-message">{message}</span>}
         </div>
       </form>

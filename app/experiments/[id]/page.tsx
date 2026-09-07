@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import Link from "next/link";
 import { createClient } from "../../../lib/supabase/server";
 import { StatusPill } from "../../../components/StatusPill";
 
@@ -7,6 +8,7 @@ export const dynamic = "force-dynamic";
 export default async function ExperimentDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const supabase = await createClient();
+  const { data: auth } = await supabase.auth.getUser();
 
   const { data: experiment } = await supabase
     .from("experiments")
@@ -15,6 +17,13 @@ export default async function ExperimentDetail({ params }: { params: Promise<{ i
     .single();
 
   if (!experiment) notFound();
+
+  const { data: profile } = auth.user
+    ? await supabase.from("profiles").select("role").eq("id", auth.user.id).single()
+    : { data: null };
+  const isAdmin = profile?.role === "admin";
+  const isOwner = auth.user?.id === experiment.researcher_id;
+  const canEdit = isAdmin || (isOwner && (experiment.status === "draft" || experiment.status === "submitted"));
 
   const { data: stages } = await supabase
     .from("experiment_stages")
@@ -41,7 +50,10 @@ export default async function ExperimentDetail({ params }: { params: Promise<{ i
           <h1>{experiment.title}</h1>
           <p className="lede">{experiment.summary}</p>
         </div>
-        <StatusPill status={experiment.status} />
+        <div className="detail-actions">
+          <StatusPill status={experiment.status} />
+          {canEdit && <Link className="button" href={`/experiments/${experiment.id}/edit`}>{isAdmin ? "Admin Edit" : "Edit Experiment"}</Link>}
+        </div>
       </div>
 
       <div className="facts-grid">

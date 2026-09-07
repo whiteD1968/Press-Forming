@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { AccountNav } from "./AccountNav";
 
 export function Header() {
   return (
@@ -10,13 +11,7 @@ export function Header() {
           <small>Architectural Products Lab</small>
         </span>
       </Link>
-      <nav className="main-nav" aria-label="Primary navigation">
-        <Link href="/atlas">Atlas</Link>
-        <Link href="/experiments">Experiments</Link>
-        <Link href="/submit">Submit</Link>
-        <Link href="/admin/review">Review</Link>
-        <Link href="/login">Login</Link>
-      </nav>
+      <AccountNav />
     </header>
   );
 }
