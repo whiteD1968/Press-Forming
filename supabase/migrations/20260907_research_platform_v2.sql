@@ -192,8 +192,20 @@ alter table public.research_sources
   add column if not exists image_credit text,
   add column if not exists file_url text,
   add column if not exists added_by uuid references auth.users(id),
-  add column if not exists status text not null default 'published',
+  add column if not exists status text not null default 'draft',
   add column if not exists updated_at timestamptz default now();
+
+update public.research_sources
+set status = case
+  when is_published = true then 'published'
+  else 'draft'
+end
+where status is null
+  or status = 'draft'
+  or status = 'published';
+
+alter table public.research_sources
+  alter column status set default 'draft';
 
 do $$
 begin
@@ -524,7 +536,11 @@ drop policy if exists "published research sources public" on public.research_sou
 create policy "published research sources public"
 on public.research_sources for select
 to anon, authenticated
-using (is_published = true or status = 'published' or public.is_admin());
+using (
+  public.is_admin()
+  or status = 'published'
+  or (is_published = true and status <> 'archived')
+);
 
 drop policy if exists "research sources contributors read own" on public.research_sources;
 create policy "research sources contributors read own"
@@ -585,29 +601,243 @@ using (public.is_admin())
 with check (public.is_admin());
 
 drop policy if exists "library media authenticated read own" on public.library_media;
-create policy "library media authenticated read own"
+drop policy if exists "library media public read parent published" on public.library_media;
+create policy "library media public read parent published"
+on public.library_media for select
+to anon, authenticated
+using (
+  public.is_admin()
+  or (
+    entity_type = 'research_source'
+    and exists (
+      select 1 from public.research_sources rs
+      where rs.id = entity_id
+        and (rs.status = 'published' or (rs.is_published = true and rs.status <> 'archived'))
+    )
+  )
+  or (
+    entity_type = 'material'
+    and exists (
+      select 1 from public.materials m
+      where m.id = entity_id
+        and (m.status = 'published' or m.is_published = true)
+    )
+  )
+  or (
+    entity_type = 'product'
+    and exists (
+      select 1 from public.products p
+      where p.id = entity_id
+        and (p.status = 'published' or p.is_published = true)
+    )
+  )
+  or (
+    entity_type = 'equipment'
+    and exists (
+      select 1 from public.equipment e
+      where e.id = entity_id
+        and (e.status = 'published' or e.is_published = true)
+    )
+  )
+  or (
+    entity_type = 'atlas_entry'
+    and exists (
+      select 1 from public.atlas_entries ae
+      where ae.id = entity_id
+        and (ae.status = 'published' or ae.is_published = true)
+    )
+  )
+);
+
+drop policy if exists "library media contributors read own parent" on public.library_media;
+create policy "library media contributors read own parent"
 on public.library_media for select
 to authenticated
-using (public.is_admin() or public.is_active_user());
+using (
+  public.is_admin()
+  or (
+    created_by = auth.uid()
+    and public.is_active_user()
+    and (
+      (
+        entity_type = 'research_source'
+        and exists (select 1 from public.research_sources rs where rs.id = entity_id and rs.added_by = auth.uid())
+      )
+      or (
+        entity_type = 'material'
+        and exists (select 1 from public.materials m where m.id = entity_id and m.created_by = auth.uid())
+      )
+      or (
+        entity_type = 'product'
+        and exists (select 1 from public.products p where p.id = entity_id and p.created_by = auth.uid())
+      )
+      or (
+        entity_type = 'equipment'
+        and exists (select 1 from public.equipment e where e.id = entity_id and e.created_by = auth.uid())
+      )
+      or (
+        entity_type = 'atlas_entry'
+        and exists (select 1 from public.atlas_entries ae where ae.id = entity_id and ae.created_by = auth.uid())
+      )
+    )
+  )
+);
 
 drop policy if exists "library media contributors create" on public.library_media;
 create policy "library media contributors create"
 on public.library_media for insert
 to authenticated
-with check (public.is_active_user() and created_by = auth.uid());
+with check (
+  public.is_admin()
+  or (
+    created_by = auth.uid()
+    and public.is_active_user()
+    and (
+      (
+        entity_type = 'research_source'
+        and exists (
+          select 1 from public.research_sources rs
+          where rs.id = entity_id
+            and rs.added_by = auth.uid()
+            and rs.status in ('draft', 'submitted')
+        )
+      )
+      or (
+        entity_type = 'material'
+        and exists (
+          select 1 from public.materials m
+          where m.id = entity_id
+            and m.created_by = auth.uid()
+            and m.status in ('draft', 'submitted')
+        )
+      )
+      or (
+        entity_type = 'product'
+        and exists (
+          select 1 from public.products p
+          where p.id = entity_id
+            and p.created_by = auth.uid()
+            and p.status in ('draft', 'submitted')
+        )
+      )
+      or (
+        entity_type = 'equipment'
+        and exists (
+          select 1 from public.equipment e
+          where e.id = entity_id
+            and e.created_by = auth.uid()
+            and e.status in ('draft', 'submitted')
+        )
+      )
+      or (
+        entity_type = 'atlas_entry'
+        and exists (
+          select 1 from public.atlas_entries ae
+          where ae.id = entity_id
+            and ae.created_by = auth.uid()
+            and ae.status in ('draft', 'submitted')
+        )
+      )
+    )
+  )
+);
 
 drop policy if exists "library media contributors update own" on public.library_media;
 create policy "library media contributors update own"
 on public.library_media for update
 to authenticated
-using (public.is_admin() or (created_by = auth.uid() and public.is_active_user()))
-with check (public.is_admin() or (created_by = auth.uid() and public.is_active_user()));
+using (
+  public.is_admin()
+  or (
+    created_by = auth.uid()
+    and public.is_active_user()
+    and (
+      (
+        entity_type = 'research_source'
+        and exists (select 1 from public.research_sources rs where rs.id = entity_id and rs.added_by = auth.uid() and rs.status in ('draft', 'submitted'))
+      )
+      or (
+        entity_type = 'material'
+        and exists (select 1 from public.materials m where m.id = entity_id and m.created_by = auth.uid() and m.status in ('draft', 'submitted'))
+      )
+      or (
+        entity_type = 'product'
+        and exists (select 1 from public.products p where p.id = entity_id and p.created_by = auth.uid() and p.status in ('draft', 'submitted'))
+      )
+      or (
+        entity_type = 'equipment'
+        and exists (select 1 from public.equipment e where e.id = entity_id and e.created_by = auth.uid() and e.status in ('draft', 'submitted'))
+      )
+      or (
+        entity_type = 'atlas_entry'
+        and exists (select 1 from public.atlas_entries ae where ae.id = entity_id and ae.created_by = auth.uid() and ae.status in ('draft', 'submitted'))
+      )
+    )
+  )
+)
+with check (
+  public.is_admin()
+  or (
+    created_by = auth.uid()
+    and public.is_active_user()
+    and (
+      (
+        entity_type = 'research_source'
+        and exists (select 1 from public.research_sources rs where rs.id = entity_id and rs.added_by = auth.uid() and rs.status in ('draft', 'submitted'))
+      )
+      or (
+        entity_type = 'material'
+        and exists (select 1 from public.materials m where m.id = entity_id and m.created_by = auth.uid() and m.status in ('draft', 'submitted'))
+      )
+      or (
+        entity_type = 'product'
+        and exists (select 1 from public.products p where p.id = entity_id and p.created_by = auth.uid() and p.status in ('draft', 'submitted'))
+      )
+      or (
+        entity_type = 'equipment'
+        and exists (select 1 from public.equipment e where e.id = entity_id and e.created_by = auth.uid() and e.status in ('draft', 'submitted'))
+      )
+      or (
+        entity_type = 'atlas_entry'
+        and exists (select 1 from public.atlas_entries ae where ae.id = entity_id and ae.created_by = auth.uid() and ae.status in ('draft', 'submitted'))
+      )
+    )
+  )
+);
 
 drop policy if exists "library media contributors delete own" on public.library_media;
 create policy "library media contributors delete own"
 on public.library_media for delete
 to authenticated
-using (public.is_admin() or (created_by = auth.uid() and public.is_active_user()));
+using (
+  public.is_admin()
+  or (
+    created_by = auth.uid()
+    and public.is_active_user()
+    and (
+      (
+        entity_type = 'research_source'
+        and exists (select 1 from public.research_sources rs where rs.id = entity_id and rs.added_by = auth.uid() and rs.status in ('draft', 'submitted'))
+      )
+      or (
+        entity_type = 'material'
+        and exists (select 1 from public.materials m where m.id = entity_id and m.created_by = auth.uid() and m.status in ('draft', 'submitted'))
+      )
+      or (
+        entity_type = 'product'
+        and exists (select 1 from public.products p where p.id = entity_id and p.created_by = auth.uid() and p.status in ('draft', 'submitted'))
+      )
+      or (
+        entity_type = 'equipment'
+        and exists (select 1 from public.equipment e where e.id = entity_id and e.created_by = auth.uid() and e.status in ('draft', 'submitted'))
+      )
+      or (
+        entity_type = 'atlas_entry'
+        and exists (select 1 from public.atlas_entries ae where ae.id = entity_id and ae.created_by = auth.uid() and ae.status in ('draft', 'submitted'))
+      )
+    )
+  )
+);
 
 drop policy if exists "library media admins manage" on public.library_media;
 create policy "library media admins manage"
@@ -620,11 +850,18 @@ drop policy if exists "experiment material links visible" on public.experiment_m
 create policy "experiment material links visible"
 on public.experiment_materials for select
 to anon, authenticated
-using (exists (
-  select 1 from public.experiments e
-  where e.id = experiment_id
-    and (e.status = 'published' or e.researcher_id = auth.uid() or public.is_admin())
-));
+using (
+  public.is_admin()
+  or exists (
+    select 1 from public.experiments e
+    where e.id = experiment_id
+      and e.researcher_id = auth.uid()
+  )
+  or (
+    exists (select 1 from public.experiments e where e.id = experiment_id and e.status = 'published')
+    and exists (select 1 from public.materials m where m.id = material_id and (m.status = 'published' or m.is_published = true))
+  )
+);
 
 drop policy if exists "experiment material links manage" on public.experiment_materials;
 create policy "experiment material links manage"
@@ -649,11 +886,18 @@ drop policy if exists "experiment product links visible" on public.experiment_pr
 create policy "experiment product links visible"
 on public.experiment_products for select
 to anon, authenticated
-using (exists (
-  select 1 from public.experiments e
-  where e.id = experiment_id
-    and (e.status = 'published' or e.researcher_id = auth.uid() or public.is_admin())
-));
+using (
+  public.is_admin()
+  or exists (
+    select 1 from public.experiments e
+    where e.id = experiment_id
+      and e.researcher_id = auth.uid()
+  )
+  or (
+    exists (select 1 from public.experiments e where e.id = experiment_id and e.status = 'published')
+    and exists (select 1 from public.products p where p.id = product_id and (p.status = 'published' or p.is_published = true))
+  )
+);
 
 drop policy if exists "experiment product links manage" on public.experiment_products;
 create policy "experiment product links manage"
@@ -678,11 +922,18 @@ drop policy if exists "experiment equipment links visible" on public.experiment_
 create policy "experiment equipment links visible"
 on public.experiment_equipment for select
 to anon, authenticated
-using (exists (
-  select 1 from public.experiments e
-  where e.id = experiment_id
-    and (e.status = 'published' or e.researcher_id = auth.uid() or public.is_admin())
-));
+using (
+  public.is_admin()
+  or exists (
+    select 1 from public.experiments e
+    where e.id = experiment_id
+      and e.researcher_id = auth.uid()
+  )
+  or (
+    exists (select 1 from public.experiments e where e.id = experiment_id and e.status = 'published')
+    and exists (select 1 from public.equipment eq where eq.id = equipment_id and (eq.status = 'published' or eq.is_published = true))
+  )
+);
 
 drop policy if exists "experiment equipment links manage" on public.experiment_equipment;
 create policy "experiment equipment links manage"
@@ -707,11 +958,22 @@ drop policy if exists "experiment source links visible" on public.experiment_sou
 create policy "experiment source links visible"
 on public.experiment_sources for select
 to anon, authenticated
-using (exists (
-  select 1 from public.experiments e
-  where e.id = experiment_id
-    and (e.status = 'published' or e.researcher_id = auth.uid() or public.is_admin())
-));
+using (
+  public.is_admin()
+  or exists (
+    select 1 from public.experiments e
+    where e.id = experiment_id
+      and e.researcher_id = auth.uid()
+  )
+  or (
+    exists (select 1 from public.experiments e where e.id = experiment_id and e.status = 'published')
+    and exists (
+      select 1 from public.research_sources rs
+      where rs.id = source_id
+        and (rs.status = 'published' or (rs.is_published = true and rs.status <> 'archived'))
+    )
+  )
+);
 
 drop policy if exists "experiment source links manage" on public.experiment_sources;
 create policy "experiment source links manage"
@@ -736,25 +998,77 @@ drop policy if exists "atlas source links visible" on public.atlas_entry_sources
 create policy "atlas source links visible"
 on public.atlas_entry_sources for select
 to anon, authenticated
-using (exists (select 1 from public.atlas_entries ae where ae.id = atlas_entry_id and (ae.status = 'published' or ae.is_published = true or public.is_admin() or (ae.created_by = auth.uid() and public.is_active_user()))));
+using (
+  public.is_admin()
+  or exists (
+    select 1 from public.atlas_entries ae
+    where ae.id = atlas_entry_id
+      and ae.created_by = auth.uid()
+      and public.is_active_user()
+  )
+  or (
+    exists (select 1 from public.atlas_entries ae where ae.id = atlas_entry_id and (ae.status = 'published' or ae.is_published = true))
+    and exists (
+      select 1 from public.research_sources rs
+      where rs.id = source_id
+        and (rs.status = 'published' or (rs.is_published = true and rs.status <> 'archived'))
+    )
+  )
+);
 
 drop policy if exists "atlas material links visible" on public.atlas_entry_materials;
 create policy "atlas material links visible"
 on public.atlas_entry_materials for select
 to anon, authenticated
-using (exists (select 1 from public.atlas_entries ae where ae.id = atlas_entry_id and (ae.status = 'published' or ae.is_published = true or public.is_admin() or (ae.created_by = auth.uid() and public.is_active_user()))));
+using (
+  public.is_admin()
+  or exists (
+    select 1 from public.atlas_entries ae
+    where ae.id = atlas_entry_id
+      and ae.created_by = auth.uid()
+      and public.is_active_user()
+  )
+  or (
+    exists (select 1 from public.atlas_entries ae where ae.id = atlas_entry_id and (ae.status = 'published' or ae.is_published = true))
+    and exists (select 1 from public.materials m where m.id = material_id and (m.status = 'published' or m.is_published = true))
+  )
+);
 
 drop policy if exists "atlas experiment links visible" on public.atlas_entry_experiments;
 create policy "atlas experiment links visible"
 on public.atlas_entry_experiments for select
 to anon, authenticated
-using (exists (select 1 from public.atlas_entries ae where ae.id = atlas_entry_id and (ae.status = 'published' or ae.is_published = true or public.is_admin() or (ae.created_by = auth.uid() and public.is_active_user()))));
+using (
+  public.is_admin()
+  or exists (
+    select 1 from public.atlas_entries ae
+    where ae.id = atlas_entry_id
+      and ae.created_by = auth.uid()
+      and public.is_active_user()
+  )
+  or (
+    exists (select 1 from public.atlas_entries ae where ae.id = atlas_entry_id and (ae.status = 'published' or ae.is_published = true))
+    and exists (select 1 from public.experiments e where e.id = experiment_id and e.status = 'published')
+  )
+);
 
 drop policy if exists "atlas equipment links visible" on public.atlas_entry_equipment;
 create policy "atlas equipment links visible"
 on public.atlas_entry_equipment for select
 to anon, authenticated
-using (exists (select 1 from public.atlas_entries ae where ae.id = atlas_entry_id and (ae.status = 'published' or ae.is_published = true or public.is_admin() or (ae.created_by = auth.uid() and public.is_active_user()))));
+using (
+  public.is_admin()
+  or exists (
+    select 1 from public.atlas_entries ae
+    where ae.id = atlas_entry_id
+      and ae.created_by = auth.uid()
+      and public.is_active_user()
+  )
+  or (
+    exists (select 1 from public.atlas_entries ae where ae.id = atlas_entry_id and (ae.status = 'published' or ae.is_published = true))
+    and exists (select 1 from public.equipment eq where eq.id = equipment_id and (eq.status = 'published' or eq.is_published = true))
+  )
+);
 
 drop policy if exists "atlas source links manage" on public.atlas_entry_sources;
 create policy "atlas source links manage"
@@ -763,12 +1077,60 @@ to authenticated
 using (public.is_admin())
 with check (public.is_admin());
 
+drop policy if exists "atlas source links contributors create" on public.atlas_entry_sources;
+create policy "atlas source links contributors create"
+on public.atlas_entry_sources for insert
+to authenticated
+with check (exists (
+  select 1 from public.atlas_entries ae
+  where ae.id = atlas_entry_id
+    and ae.created_by = auth.uid()
+    and public.is_active_user()
+    and ae.status in ('draft', 'submitted')
+));
+
+drop policy if exists "atlas source links contributors delete" on public.atlas_entry_sources;
+create policy "atlas source links contributors delete"
+on public.atlas_entry_sources for delete
+to authenticated
+using (exists (
+  select 1 from public.atlas_entries ae
+  where ae.id = atlas_entry_id
+    and ae.created_by = auth.uid()
+    and public.is_active_user()
+    and ae.status in ('draft', 'submitted')
+));
+
 drop policy if exists "atlas material links manage" on public.atlas_entry_materials;
 create policy "atlas material links manage"
 on public.atlas_entry_materials for all
 to authenticated
 using (public.is_admin())
 with check (public.is_admin());
+
+drop policy if exists "atlas material links contributors create" on public.atlas_entry_materials;
+create policy "atlas material links contributors create"
+on public.atlas_entry_materials for insert
+to authenticated
+with check (exists (
+  select 1 from public.atlas_entries ae
+  where ae.id = atlas_entry_id
+    and ae.created_by = auth.uid()
+    and public.is_active_user()
+    and ae.status in ('draft', 'submitted')
+));
+
+drop policy if exists "atlas material links contributors delete" on public.atlas_entry_materials;
+create policy "atlas material links contributors delete"
+on public.atlas_entry_materials for delete
+to authenticated
+using (exists (
+  select 1 from public.atlas_entries ae
+  where ae.id = atlas_entry_id
+    and ae.created_by = auth.uid()
+    and public.is_active_user()
+    and ae.status in ('draft', 'submitted')
+));
 
 drop policy if exists "atlas experiment links manage" on public.atlas_entry_experiments;
 create policy "atlas experiment links manage"
@@ -777,12 +1139,60 @@ to authenticated
 using (public.is_admin())
 with check (public.is_admin());
 
+drop policy if exists "atlas experiment links contributors create" on public.atlas_entry_experiments;
+create policy "atlas experiment links contributors create"
+on public.atlas_entry_experiments for insert
+to authenticated
+with check (exists (
+  select 1 from public.atlas_entries ae
+  where ae.id = atlas_entry_id
+    and ae.created_by = auth.uid()
+    and public.is_active_user()
+    and ae.status in ('draft', 'submitted')
+));
+
+drop policy if exists "atlas experiment links contributors delete" on public.atlas_entry_experiments;
+create policy "atlas experiment links contributors delete"
+on public.atlas_entry_experiments for delete
+to authenticated
+using (exists (
+  select 1 from public.atlas_entries ae
+  where ae.id = atlas_entry_id
+    and ae.created_by = auth.uid()
+    and public.is_active_user()
+    and ae.status in ('draft', 'submitted')
+));
+
 drop policy if exists "atlas equipment links manage" on public.atlas_entry_equipment;
 create policy "atlas equipment links manage"
 on public.atlas_entry_equipment for all
 to authenticated
 using (public.is_admin())
 with check (public.is_admin());
+
+drop policy if exists "atlas equipment links contributors create" on public.atlas_entry_equipment;
+create policy "atlas equipment links contributors create"
+on public.atlas_entry_equipment for insert
+to authenticated
+with check (exists (
+  select 1 from public.atlas_entries ae
+  where ae.id = atlas_entry_id
+    and ae.created_by = auth.uid()
+    and public.is_active_user()
+    and ae.status in ('draft', 'submitted')
+));
+
+drop policy if exists "atlas equipment links contributors delete" on public.atlas_entry_equipment;
+create policy "atlas equipment links contributors delete"
+on public.atlas_entry_equipment for delete
+to authenticated
+using (exists (
+  select 1 from public.atlas_entries ae
+  where ae.id = atlas_entry_id
+    and ae.created_by = auth.uid()
+    and public.is_active_user()
+    and ae.status in ('draft', 'submitted')
+));
 
 insert into public.taxonomy_terms (taxonomy_type, name, slug, sort_order)
 values
