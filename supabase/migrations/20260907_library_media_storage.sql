@@ -11,6 +11,9 @@ values (
 )
 on conflict (id) do nothing;
 
+-- Current anonymous access to media follows parent publication state.
+-- A future access-control migration will separate editorial publication status,
+-- internal approved-researcher visibility, and deliberately public visibility.
 drop policy if exists "library media objects public read parent published" on storage.objects;
 create policy "library media objects public read parent published"
 on storage.objects for select
@@ -28,11 +31,29 @@ using (
       )
     )
     or (
+      (storage.foldername(name))[1] = 'research_source'
+      and public.is_active_user()
+      and exists (
+        select 1 from public.research_sources rs
+        where rs.id::text = (storage.foldername(name))[2]
+          and rs.added_by = auth.uid()
+      )
+    )
+    or (
       (storage.foldername(name))[1] = 'material'
       and exists (
         select 1 from public.materials m
         where m.id::text = (storage.foldername(name))[2]
           and (m.status = 'published' or m.is_published = true)
+      )
+    )
+    or (
+      (storage.foldername(name))[1] = 'material'
+      and public.is_active_user()
+      and exists (
+        select 1 from public.materials m
+        where m.id::text = (storage.foldername(name))[2]
+          and m.created_by = auth.uid()
       )
     )
     or (
@@ -44,6 +65,15 @@ using (
       )
     )
     or (
+      (storage.foldername(name))[1] = 'product'
+      and public.is_active_user()
+      and exists (
+        select 1 from public.products p
+        where p.id::text = (storage.foldername(name))[2]
+          and p.created_by = auth.uid()
+      )
+    )
+    or (
       (storage.foldername(name))[1] = 'equipment'
       and exists (
         select 1 from public.equipment e
@@ -52,11 +82,29 @@ using (
       )
     )
     or (
+      (storage.foldername(name))[1] = 'equipment'
+      and public.is_active_user()
+      and exists (
+        select 1 from public.equipment e
+        where e.id::text = (storage.foldername(name))[2]
+          and e.created_by = auth.uid()
+      )
+    )
+    or (
       (storage.foldername(name))[1] = 'atlas_entry'
       and exists (
         select 1 from public.atlas_entries ae
         where ae.id::text = (storage.foldername(name))[2]
           and (ae.status = 'published' or ae.is_published = true)
+      )
+    )
+    or (
+      (storage.foldername(name))[1] = 'atlas_entry'
+      and public.is_active_user()
+      and exists (
+        select 1 from public.atlas_entries ae
+        where ae.id::text = (storage.foldername(name))[2]
+          and ae.created_by = auth.uid()
       )
     )
   )
