@@ -46,12 +46,15 @@ export function AccountNav() {
     <nav className="main-nav" aria-label="Primary navigation">
       <Link href="/atlas">Atlas</Link>
       <Link href="/experiments">Experiments</Link>
+      <Link href="/research">Research</Link>
+      <Link href="/materials">Materials</Link>
+      <Link href="/resources">Resources</Link>
       {state === "loading" ? null : state === "public" ? (
         <Link href="/login">Login</Link>
       ) : (
         <>
           <Link href="/submit">Submit</Link>
-          {state === "admin" ? <Link href="/admin">Admin</Link> : <Link href="/my-experiments">My Experiments</Link>}
+          {state === "admin" ? <Link href="/admin">Admin</Link> : <Link href="/my-work">My Work</Link>}
           <button className="nav-button" type="button" onClick={signOut}>Sign Out</button>
         </>
       )}

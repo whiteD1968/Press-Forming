@@ -97,8 +97,10 @@ h2 { font-size: clamp(28px, 3vw, 54px); letter-spacing: -.045em; line-height: 1;
 .media-grid figure { margin: 0; background: var(--paper); }
 .media-grid img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; display: block; }
 .media-grid figcaption { padding: 9px 0; color: var(--muted); font-size: 12px; }
+.media-grid figcaption small, .media-grid figcaption a { display: block; margin-top: 4px; }
 .media-grid figcaption span { color: var(--ink); text-transform: uppercase; letter-spacing: .08em; margin-right: 10px; }
 .media-grid figure button { border: 0; background: transparent; padding: 6px 0 0; text-decoration: underline; text-underline-offset: 4px; }
+.media-placeholder { min-height: 180px; border: 1px solid var(--line); background: var(--paper); color: var(--muted); display: grid; place-items: center; font-size: 12px; text-transform: uppercase; letter-spacing: .1em; }
 .detail-section { padding: 48px 0; border-top: 1px solid var(--line); }
 .stage-stack { border-top: 1px solid var(--ink); }
 .stage-card { display: grid; grid-template-columns: 90px 1fr; gap: 20px; padding: 26px 0; border-bottom: 1px solid var(--line); }
@@ -152,6 +154,23 @@ textarea { resize: vertical; }
 .admin-table button, .inline-actions button, .inline-actions a, .review-actions a { border: 0; background: transparent; padding: 0; text-decoration: underline; text-underline-offset: 4px; }
 .admin-table button:disabled, .inline-actions button:disabled { color: var(--muted); cursor: not-allowed; text-decoration: none; }
 .inline-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.filter-bar { display: grid; grid-template-columns: 2fr repeat(3, 1fr); gap: 10px; margin-bottom: 32px; }
+.research-index { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--ink); }
+.research-card { display: grid; grid-template-rows: auto 1fr; gap: 18px; padding: 18px 18px 40px 0; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.research-card:nth-child(3n) { border-right: 0; }
+.research-card img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: var(--paper); }
+.research-card span, .research-card small, .research-card b { display: block; color: var(--muted); font-size: 12px; font-weight: 400; }
+.research-card h2 { font-size: 28px; margin: 8px 0; }
+.research-card p { color: var(--muted); }
+.related-list { display: grid; border-top: 1px solid var(--ink); }
+.related-list a { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.related-list small { color: var(--muted); }
+.section-heading-row { display: flex; justify-content: space-between; gap: 20px; align-items: baseline; }
+.library-admin-row { display: grid; grid-template-columns: 1.3fr 1fr .7fr .7fr 1.7fr; gap: 14px; align-items: center; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.library-admin-row strong, .library-admin-row small { display: block; }
+.library-admin-row small { color: var(--muted); margin-top: 4px; }
+.stage-editor-card summary { cursor: pointer; list-style: none; }
+.stage-editor-card summary::-webkit-details-marker { display: none; }
 
 .site-footer { max-width: var(--max); margin: 0 auto; padding: 26px 28px 50px; display: flex; justify-content: space-between; gap: 20px; color: var(--muted); font-size: 12px; }
 
@@ -164,7 +183,7 @@ textarea { resize: vertical; }
   .facts-grid { grid-template-columns: repeat(3, 1fr); }
   .media-grid { grid-template-columns: repeat(2, 1fr); }
   .form-grid-3 { grid-template-columns: 1fr 1fr; }
-  .researcher-row, .experiment-admin-row, .my-experiment-row, .source-row { grid-template-columns: 1fr 1fr; }
+  .researcher-row, .experiment-admin-row, .my-experiment-row, .source-row, .library-admin-row, .filter-bar, .research-index { grid-template-columns: 1fr 1fr; }
 }
 
 @media (max-width: 640px) {
@@ -179,5 +198,6 @@ textarea { resize: vertical; }
   .form-grid .full { grid-column: auto; }
   .stage-card { grid-template-columns: 48px 1fr; }
   .experiment-form fieldset { padding: 20px 14px; }
-  .researcher-row, .experiment-admin-row, .my-experiment-row, .source-row { grid-template-columns: 1fr; }
+  .researcher-row, .experiment-admin-row, .my-experiment-row, .source-row, .library-admin-row, .filter-bar, .research-index, .related-list a { grid-template-columns: 1fr; }
+  .research-card { border-right: 0; padding-right: 0; }
 }
