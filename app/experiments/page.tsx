@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { createClient } from "../../lib/supabase/server";
-import { StatusPill } from "../../components/StatusPill";
 import { getResearchAccessState, isApprovedState } from "../../lib/access";
+import { ExperimentIndexClient } from "../../components/ExperimentIndexClient";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +15,7 @@ export default async function ExperimentsPage() {
     const supabase = await createClient();
     const { data, error } = await supabase
       .from("experiments")
-      .select("id, code, title, summary, status, visibility, material_name, thickness_mm, outcome, created_at")
+      .select("id, code, title, research_question, research_objective, summary, observations, conclusion, status, visibility, material_name, material_condition, thickness_mm, forming_method, geometry_type, undercut_type, outcome, researcher_name, created_at, experiment_stages(count)")
       .order("created_at", { ascending: false });
     if (error) throw error;
     experiments = data ?? [];
@@ -44,33 +44,7 @@ export default async function ExperimentsPage() {
         </div>
       )}
 
-      {approved && experiments.length > 0 && (
-        <form className="form-panel" action="/experiments/compare">
-          <div className="section-heading-row"><p className="section-index">Compare Experiments</p><button className="button" type="submit">Compare Selected</button></div>
-          <div className="filter-bar">
-            {experiments.map((experiment) => <label key={experiment.id}><input name="id" type="checkbox" value={experiment.id} /> {experiment.code || experiment.title}</label>)}
-          </div>
-        </form>
-      )}
-
-      <div className="experiment-list">
-        {experiments.map((experiment) => (
-          <Link href={`/experiments/${experiment.id}`} className="experiment-row" key={experiment.id}>
-            <div className="experiment-code">{experiment.code}</div>
-            <div className="experiment-main">
-              <h2>{experiment.title}</h2>
-              <p>{experiment.summary || "No summary recorded."}</p>
-            </div>
-            <div className="experiment-meta">
-              <span>{experiment.material_name || "-"}</span>
-              <span>{experiment.thickness_mm ? `${experiment.thickness_mm} mm` : "-"}</span>
-              {experiment.outcome && <span>{experiment.outcome}</span>}
-              <StatusPill status={experiment.status} />
-              {approved && experiment.visibility && <span className="status-pill">{String(experiment.visibility).toUpperCase()}</span>}
-            </div>
-          </Link>
-        ))}
-      </div>
+      <ExperimentIndexClient approved={approved} experiments={experiments.map((experiment) => ({ ...experiment, stage_count: experiment.experiment_stages?.[0]?.count ?? 0 }))} />
     </section>
   );
 }

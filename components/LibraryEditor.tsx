@@ -11,6 +11,10 @@ type Kind = "research" | "material" | "product" | "vendor" | "equipment" | "atla
 type Option = { id: string; label: string };
 type Field = { name: string; label: string; type?: "text" | "number" | "date" | "textarea" | "select"; section?: string; options?: string[] };
 type RecordShape = Record<string, string | number | boolean | null>;
+type EditorMode = "quick" | "full";
+
+const sourceTypeOptions = ["Journal Article", "Conference Paper", "Patent", "Book", "Book Chapter", "Thesis", "Technical Manual", "Historical Object", "Historical Image", "Contemporary Image", "Process Image", "Video", "Website", "Supplier / Manufacturer Page", "Other"];
+const quickResearchFields = new Set(["title", "source_type", "author", "publication_year", "url", "doi", "citation", "short_note", "why_it_matters"]);
 
 const configs: Record<Kind, { table: string; titleField: string; entityType?: string; publicHref: (id: string) => string; fields: Field[] }> = {
   research: {
@@ -20,7 +24,7 @@ const configs: Record<Kind, { table: string; titleField: string; entityType?: st
     publicHref: (id) => `/research/${id}`,
     fields: [
       { name: "title", label: "Title" },
-      { name: "source_type", label: "Source type", type: "select", options: ["Article", "Journal Paper", "Conference Paper", "Patent", "Book", "Thesis", "Technical Manual", "Historical Object", "Image", "Video", "Website", "Supplier Page"] },
+      { name: "source_type", label: "Source type", type: "select", options: sourceTypeOptions },
       { name: "author", label: "Author" },
       { name: "publication_year", label: "Publication year", type: "number" },
       { name: "publisher", label: "Publisher" },
@@ -31,6 +35,8 @@ const configs: Record<Kind, { table: string; titleField: string; entityType?: st
       { name: "file_url", label: "File URL" },
       { name: "abstract", label: "Abstract", type: "textarea" },
       { name: "summary", label: "Summary", type: "textarea" },
+      { name: "short_note", label: "Short note", type: "textarea" },
+      { name: "why_it_matters", label: "Why it matters", type: "textarea" },
       { name: "historical_context", label: "Historical context", type: "textarea" },
       { name: "principle", label: "Principle", type: "textarea" },
       { name: "research_translation", label: "Research translation", type: "textarea" },
@@ -39,6 +45,10 @@ const configs: Record<Kind, { table: string; titleField: string; entityType?: st
       { name: "tool_relevance", label: "Tool relevance", type: "textarea" },
       { name: "undercut_relevance", label: "Undercut relevance", type: "textarea" },
       { name: "notes", label: "Notes", type: "textarea" },
+      { name: "source_archive", label: "Source archive" },
+      { name: "license", label: "License" },
+      { name: "rights_notes", label: "Rights notes", type: "textarea" },
+      { name: "accessed_date", label: "Accessed date", type: "date" },
     ],
   },
   material: {
@@ -161,7 +171,11 @@ export function LibraryEditor({ kind, id, admin = false }: { kind: Kind; id?: st
   const [sources, setSources] = useState<Option[]>([]);
   const [equipment, setEquipment] = useState<Option[]>([]);
   const [experiments, setExperiments] = useState<Option[]>([]);
+  const [taxonomyTags, setTaxonomyTags] = useState<Option[]>([]);
   const [purchases, setPurchases] = useState<RowPurchase[]>([]);
+  const [mode, setMode] = useState<EditorMode>(kind === "research" && !id ? "quick" : "full");
+  const [duplicates, setDuplicates] = useState<RecordShape[]>([]);
+  const [duplicateDismissed, setDuplicateDismissed] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -197,10 +211,13 @@ export function LibraryEditor({ kind, id, admin = false }: { kind: Kind; id?: st
       setSources(((sourceRows.data ?? []) as { id: string; title: string }[]).map((item) => ({ id: item.id, label: item.title })));
       setEquipment(((equipmentRows.data ?? []) as { id: string; name: string }[]).map((item) => ({ id: item.id, label: item.name })));
       setExperiments(((experimentRows.data ?? []) as { id: string; code: string | null; title: string }[]).map((item) => ({ id: item.id, label: `${item.code || "Experiment"} / ${item.title}` })));
+      const { data: tagRows } = await supabase.from("taxonomy_terms").select("id, name").eq("is_active", true).order("name", { ascending: true }).limit(200);
+      setTaxonomyTags(((tagRows ?? []) as { id: string; name: string }[]).map((item) => ({ id: item.id, label: item.name })));
 
       if (!id) {
         setAllowed(true);
-        setRecord({ status: "draft", visibility: "internal", is_published: false, currency: "USD", is_active: true });
+        const params = new URLSearchParams(window.location.search);
+        setRecord({ status: "draft", visibility: "internal", is_published: false, currency: "USD", is_active: true, material_id: params.get("material") });
         return;
       }
 
@@ -240,12 +257,37 @@ export function LibraryEditor({ kind, id, admin = false }: { kind: Kind; id?: st
   }, [config.entityType, config.table, id, kind]);
 
   const fieldsBySection = useMemo(() => {
-    return config.fields.reduce((groups, field) => {
+    const activeFields = kind === "research" && mode === "quick"
+      ? config.fields.filter((field) => quickResearchFields.has(field.name))
+      : config.fields;
+    return activeFields.reduce((groups, field) => {
       const key = field.section || "Public record data";
       groups.set(key, [...(groups.get(key) ?? []), field]);
       return groups;
     }, new Map<string, Field[]>());
-  }, [config.fields]);
+  }, [config.fields, kind, mode]);
+
+  async function checkDuplicates(form: FormData) {
+    if (kind !== "research" || id || duplicateDismissed) return false;
+    const supabase = createClient();
+    const doi = stringOrNull(form.get("doi"));
+    const url = stringOrNull(form.get("url"));
+    const title = String(form.get("title") || "").trim().toLowerCase();
+    const checks = [];
+    if (doi) checks.push(supabase.from("research_sources").select("id, title, author, publication_year").eq("doi", doi).limit(3));
+    if (url) checks.push(supabase.from("research_sources").select("id, title, author, publication_year").eq("url", url).limit(3));
+    if (title) checks.push(supabase.from("research_sources").select("id, title, author, publication_year").ilike("title", title).limit(3));
+    const results = await Promise.all(checks);
+    const found = results.flatMap((result) => result.data ?? []);
+    const unique = Array.from(new Map(found.map((item) => [String(item.id), item as RecordShape])).values());
+    if (unique.length) {
+      setDuplicates(unique);
+      setMessage("POSSIBLE EXISTING SOURCE");
+      setBusy(false);
+      return true;
+    }
+    return false;
+  }
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -255,6 +297,7 @@ export function LibraryEditor({ kind, id, admin = false }: { kind: Kind; id?: st
     const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
     const supabase = createClient();
     const { data: auth } = await supabase.auth.getUser();
+    if (await checkDuplicates(form)) return;
 
     if (!auth.user) {
       setMessage("Sign in to save.");
@@ -299,6 +342,7 @@ export function LibraryEditor({ kind, id, admin = false }: { kind: Kind; id?: st
     }
 
     const savedId = String(result.data.id);
+    if (kind === "research") await saveResearchTag(savedId, form);
     if (kind === "atlas") await saveAtlasLinks(savedId, form);
     await saveMedia(savedId, form);
     window.location.href = effectiveAdmin ? config.publicHref(savedId) : "/my-work";
@@ -313,6 +357,14 @@ export function LibraryEditor({ kind, id, admin = false }: { kind: Kind; id?: st
       stringOrNull(form.get("link_equipment_id")) && supabase.from("atlas_entry_equipment").insert({ atlas_entry_id: atlasEntryId, equipment_id: stringOrNull(form.get("link_equipment_id")) }),
     ].filter(Boolean);
     for (const job of jobs) await job;
+  }
+
+  async function saveResearchTag(sourceId: string, form: FormData) {
+    const tagId = stringOrNull(form.get("research_tag_id"));
+    if (!tagId) return;
+    const supabase = createClient();
+    const { data: auth } = await supabase.auth.getUser();
+    await supabase.from("research_source_tags").insert({ source_id: sourceId, taxonomy_term_id: tagId, created_by: auth.user?.id ?? null });
   }
 
   async function addPurchaseFrom(button: HTMLButtonElement) {
@@ -352,10 +404,16 @@ export function LibraryEditor({ kind, id, admin = false }: { kind: Kind; id?: st
     const caption = stringOrNull(form.get("media_caption"));
     const credit = stringOrNull(form.get("media_credit"));
     const sourceUrl = stringOrNull(form.get("media_source_url"));
+    const creator = stringOrNull(form.get("media_creator"));
+    const originalDate = stringOrNull(form.get("media_original_date"));
+    const license = stringOrNull(form.get("media_license"));
+    const rightsNotes = stringOrNull(form.get("media_rights_notes"));
     const mediaType = stringOrNull(form.get("media_type")) || "reference";
+    const isPrimary = form.get("media_primary") === "on";
+    if (isPrimary) await supabase.from("library_media").update({ is_primary: false }).eq("entity_type", config.entityType).eq("entity_id", entityId);
 
     if (externalUrl) {
-      await supabase.from("library_media").insert({ entity_type: config.entityType, entity_id: entityId, external_url: externalUrl, caption, credit, source_url: sourceUrl, media_type: mediaType, display_order: media.length, created_by: auth.user.id });
+      await supabase.from("library_media").insert({ entity_type: config.entityType, entity_id: entityId, external_url: externalUrl, caption, credit, source_url: sourceUrl, media_type: mediaType, display_order: media.length, is_primary: isPrimary, creator, original_date: originalDate, license, rights_notes: rightsNotes, created_by: auth.user.id });
     }
 
     const files = form.getAll("media").filter((entry): entry is File => entry instanceof File && entry.size > 0);
@@ -365,8 +423,27 @@ export function LibraryEditor({ kind, id, admin = false }: { kind: Kind; id?: st
       const storagePath = `${config.entityType}/${entityId}/${Date.now()}-${index}-${safeName}`;
       const { error: uploadError } = await supabase.storage.from("library-media").upload(storagePath, file, { upsert: false });
       if (uploadError) throw uploadError;
-      await supabase.from("library_media").insert({ entity_type: config.entityType, entity_id: entityId, storage_path: storagePath, caption: caption || file.name, credit, source_url: sourceUrl, media_type: mediaType, display_order: media.length + index, created_by: auth.user.id });
+      await supabase.from("library_media").insert({ entity_type: config.entityType, entity_id: entityId, storage_path: storagePath, caption: caption || file.name, credit, source_url: sourceUrl, media_type: mediaType, display_order: media.length + index, is_primary: isPrimary && index === 0, creator, original_date: originalDate, license, rights_notes: rightsNotes, created_by: auth.user.id });
     }
+  }
+
+  async function updateMediaOrder(item: LibraryMedia, direction: -1 | 1) {
+    const currentIndex = media.findIndex((entry) => entry.id === item.id);
+    const swap = media[currentIndex + direction];
+    if (!swap) return;
+    const supabase = createClient();
+    await supabase.from("library_media").update({ display_order: swap.display_order ?? currentIndex + direction }).eq("id", item.id);
+    await supabase.from("library_media").update({ display_order: item.display_order ?? currentIndex }).eq("id", swap.id);
+    setMedia((current) => current.map((entry) => entry.id === item.id ? { ...entry, display_order: swap.display_order ?? currentIndex + direction } : entry.id === swap.id ? { ...entry, display_order: item.display_order ?? currentIndex } : entry).sort((a, b) => Number(a.display_order ?? 0) - Number(b.display_order ?? 0)));
+  }
+
+  async function setPrimaryMedia(item: LibraryMedia) {
+    if (!config.entityType || !id) return;
+    const supabase = createClient();
+    await supabase.from("library_media").update({ is_primary: false }).eq("entity_type", config.entityType).eq("entity_id", id);
+    const { error } = await supabase.from("library_media").update({ is_primary: true }).eq("id", item.id);
+    if (error) setMessage(error.message);
+    else setMedia((current) => current.map((entry) => ({ ...entry, is_primary: entry.id === item.id })));
   }
 
   async function removeMedia(item: LibraryMedia) {
@@ -391,12 +468,23 @@ export function LibraryEditor({ kind, id, admin = false }: { kind: Kind; id?: st
       </div>
 
       {message && <div className="notice">{message}</div>}
+      {duplicates.length > 0 && (
+        <div className="form-panel">
+          <p className="section-index">Possible Existing Source</p>
+          {duplicates.map((item) => <div className="library-admin-row" key={String(item.id)}><span><strong>{String(item.title ?? "Untitled")}</strong><small>{[item.author, item.publication_year].filter(Boolean).join(" / ")}</small></span><Link href={`/research/${item.id}`}>Open Existing Record</Link></div>)}
+          <button className="button" type="button" onClick={() => { setDuplicateDismissed(true); setDuplicates([]); setMessage(""); }}>Continue Anyway</button>
+        </div>
+      )}
       <form className="experiment-form" onSubmit={save}>
+        {kind === "research" && !id && <div className="filter-bar"><button className={mode === "quick" ? "button primary" : "button secondary"} type="button" onClick={() => setMode("quick")}>Quick Entry</button><button className={mode === "full" ? "button primary" : "button secondary"} type="button" onClick={() => setMode("full")}>Full Record</button></div>}
         {kind === "product" && (
-          <fieldset><legend><span>00</span> Product relations</legend><div className="form-grid"><label>Material<select name="material_id" defaultValue={String(record.material_id ?? "")}><option value="">Select material</option>{materials.map((item) => <option value={item.id} key={item.id}>{item.label}</option>)}</select></label><label>Vendor<select name="vendor_id" defaultValue={String(record.vendor_id ?? "")}><option value="">Select vendor</option>{vendors.map((item) => <option value={item.id} key={item.id}>{item.label}</option>)}</select><Link href="/contribute/vendors/new">+ Add Vendor</Link></label></div></fieldset>
+          <fieldset><legend><span>00</span> Product relations</legend><div className="form-grid"><label>Material<select name="material_id" defaultValue={String(record.material_id ?? "")}><option value="">Select material</option>{materials.map((item) => <option value={item.id} key={item.id}>{item.label}</option>)}</select></label><label>Vendor<select name="vendor_id" defaultValue={String(record.vendor_id ?? "")}><option value="">Select vendor</option>{vendors.map((item) => <option value={item.id} key={item.id}>{item.label}</option>)}</select><Link href="/contribute/vendors/new" target="_blank" rel="noopener noreferrer">+ Add Vendor</Link><button type="button" onClick={() => window.location.reload()}>Refresh vendors</button></label></div></fieldset>
         )}
         {kind === "atlas" && (
           <fieldset><legend><span>00</span> Atlas category</legend><label>Category<select name="category_id" defaultValue={String(record.category_id ?? "")} required><option value="">Select category</option>{categories.map((item) => <option value={item.id} key={item.id}>{item.label}</option>)}</select></label></fieldset>
+        )}
+        {kind === "research" && (
+          <fieldset><legend><span>Tags</span> Research tags</legend><OptionSelect name="research_tag_id" label="Add tag" options={taxonomyTags} disabled={!allowed} /></fieldset>
         )}
         {Array.from(fieldsBySection.entries()).map(([section, fields], sectionIndex) => (
           <fieldset key={section}><legend><span>{String(sectionIndex + 1).padStart(2, "0")}</span> {section}</legend><div className="form-grid">{fields.map((field) => <FieldControl key={field.name} field={field} value={record[field.name]} disabled={!allowed} />)}</div></fieldset>
@@ -413,7 +501,7 @@ export function LibraryEditor({ kind, id, admin = false }: { kind: Kind; id?: st
           </fieldset>
         )}
         {kind !== "vendor" && (
-          <fieldset><legend><span>Media</span> Images</legend><MediaGrid items={media} />{allowed && media.map((item) => <button key={item.id} type="button" onClick={() => removeMedia(item)}>Remove {item.caption || "image"}</button>)}<div className="form-grid form-grid-3"><label>Upload image<input name="media" type="file" accept="image/*" multiple disabled={!allowed} /></label><label>External image URL<input name="external_url" disabled={!allowed} /></label><label>Media type<select name="media_type" disabled={!allowed}>{mediaTypes.map((type) => <option key={type}>{type}</option>)}</select></label><label>Caption<input name="media_caption" disabled={!allowed} /></label><label>Credit<input name="media_credit" disabled={!allowed} /></label><label>Source URL<input name="media_source_url" disabled={!allowed} /></label></div></fieldset>
+          <fieldset><legend><span>Media</span> Images</legend><MediaGrid items={media} />{allowed && media.map((item, index) => <div className="inline-actions" key={item.id}><button type="button" onClick={() => setPrimaryMedia(item)}>{item.is_primary ? "Primary Image" : "Make Primary"}</button><button type="button" disabled={index === 0} onClick={() => updateMediaOrder(item, -1)}>Move Up</button><button type="button" disabled={index === media.length - 1} onClick={() => updateMediaOrder(item, 1)}>Move Down</button><button type="button" onClick={() => removeMedia(item)}>Remove {item.caption || "image"}</button></div>)}<div className="form-grid form-grid-3"><label>Upload image<input name="media" type="file" accept="image/*" multiple disabled={!allowed} /></label><label>External image URL<input name="external_url" disabled={!allowed} /></label><label>Media type<select name="media_type" disabled={!allowed}>{mediaTypes.map((type) => <option key={type}>{type}</option>)}</select></label><label><input name="media_primary" type="checkbox" disabled={!allowed} /> Primary image</label><label>Caption<input name="media_caption" disabled={!allowed} /></label><label>Credit<input name="media_credit" disabled={!allowed} /></label><label>Source URL<input name="media_source_url" disabled={!allowed} /></label><label>Creator<input name="media_creator" disabled={!allowed} /></label><label>Original date<input name="media_original_date" disabled={!allowed} /></label><label>License<input name="media_license" disabled={!allowed} /></label><label className="full">Rights notes<textarea name="media_rights_notes" rows={2} disabled={!allowed} /></label></div></fieldset>
         )}
         {kind === "vendor" && <fieldset><legend><span>Status</span> Vendor status</legend><label><input name="is_active" type="checkbox" defaultChecked={record.is_active !== false} disabled={!allowed} /> Active</label></fieldset>}
         {(admin || isAdmin) && kind !== "vendor" && (

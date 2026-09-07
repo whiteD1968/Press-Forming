@@ -11,6 +11,11 @@ export type LibraryMedia = {
   credit: string | null;
   source_url: string | null;
   display_order: number | null;
+  is_primary?: boolean | null;
+  rights_notes?: string | null;
+  license?: string | null;
+  creator?: string | null;
+  original_date?: string | null;
   signedUrl?: string | null;
 };
 
@@ -25,7 +30,7 @@ export type TaxonomyTerm = {
 };
 
 export const editorialStatuses: EditorialStatus[] = ["draft", "submitted", "reviewed", "published", "archived"];
-export const mediaTypes = ["reference", "historical", "process", "tooling", "diagram", "result", "publication", "other"];
+export const mediaTypes = ["reference", "historical", "process", "tooling", "diagram", "result", "publication", "primary", "other"];
 
 export function syncPublished(status: EditorialStatus) {
   return status === "published";

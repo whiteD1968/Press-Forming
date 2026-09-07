@@ -6,6 +6,7 @@ import { createClient } from "../lib/supabase/client";
 import { isEditableStatus, LibraryMedia } from "../lib/library";
 import { MediaGrid } from "./MediaGrid";
 import { StatusPill } from "./StatusPill";
+import { CopyCitationButton } from "./CopyCitationButton";
 import type { ResearchAccessState } from "../lib/access";
 
 type Source = {
@@ -21,6 +22,8 @@ type Source = {
   file_url: string | null;
   abstract: string | null;
   summary: string | null;
+  short_note?: string | null;
+  why_it_matters?: string | null;
   historical_context: string | null;
   principle: string | null;
   research_translation: string | null;
@@ -143,7 +146,7 @@ type ExperimentLink = {
   } | null;
 };
 
-const sourceTypes = ["Article", "Journal Paper", "Conference Paper", "Patent", "Book", "Thesis", "Technical Manual", "Historical Object", "Image", "Video", "Website", "Supplier Page"];
+const sourceTypes = ["Journal Article", "Conference Paper", "Patent", "Book", "Book Chapter", "Thesis", "Technical Manual", "Historical Object", "Historical Image", "Contemporary Image", "Process Image", "Video", "Website", "Supplier / Manufacturer Page", "Other"];
 
 async function loadMedia(entityType: string, entityIds: string[]) {
   if (!entityIds.length) return new Map<string, LibraryMedia[]>();
@@ -161,7 +164,7 @@ async function loadMedia(entityType: string, entityIds: string[]) {
     return { ...item, signedUrl: signed?.signedUrl ?? null };
   }));
 
-  return media.reduce((map, item) => {
+  return media.sort((a, b) => Number(b.is_primary === true) - Number(a.is_primary === true) || Number(a.display_order ?? 0) - Number(b.display_order ?? 0)).reduce((map, item) => {
     const current = map.get(item.entity_id) ?? [];
     current.push(item);
     map.set(item.entity_id, current);
@@ -170,13 +173,13 @@ async function loadMedia(entityType: string, entityIds: string[]) {
 }
 
 function firstMedia(media: Map<string, LibraryMedia[]>, id: string) {
-  const item = media.get(id)?.[0];
+  const item = (media.get(id) ?? []).sort((a, b) => Number(b.is_primary === true) - Number(a.is_primary === true) || Number(a.display_order ?? 0) - Number(b.display_order ?? 0))[0];
   return item?.signedUrl || item?.external_url || "";
 }
 
 function SafeLink({ href, children }: { href: string | null; children: React.ReactNode }) {
   if (!href) return null;
-  return <a href={href} target="_blank" rel="noreferrer">{children}</a>;
+  return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
 }
 
 function DetailPair({ label, value }: { label: string; value: React.ReactNode }) {
@@ -206,18 +209,25 @@ function PublicEmptyState() {
 export function ResearchLibraryPage({ accessState }: { accessState?: ResearchAccessState }) {
   const [items, setItems] = useState<Source[]>([]);
   const [media, setMedia] = useState(new Map<string, LibraryMedia[]>());
+  const [tagsBySource, setTagsBySource] = useState(new Map<string, string[]>());
   const [message, setMessage] = useState("Loading...");
   const [query, setQuery] = useState("");
   const [sourceType, setSourceType] = useState("");
   const [year, setYear] = useState("");
   const [formingMethod, setFormingMethod] = useState("");
+  const [materialRelevance, setMaterialRelevance] = useState("");
+  const [undercutRelevance, setUndercutRelevance] = useState("");
+  const [tag, setTag] = useState("");
+  const [viewMode, setViewMode] = useState<"visual" | "index">("visual");
 
   useEffect(() => {
+    const preferred = window.localStorage.getItem("research-view-mode");
+    if (preferred === "visual" || preferred === "index") setViewMode(preferred);
     async function load() {
       const supabase = createClient();
       const { data, error } = await supabase
         .from("research_sources")
-        .select("id, title, author, publication_year, source_type, summary, principle, forming_method, status, is_published")
+        .select("id, title, author, publication_year, source_type, summary, short_note, why_it_matters, principle, research_translation, forming_method, material_relevance, undercut_relevance, notes, status, is_published")
         .order("publication_year", { ascending: false })
         .limit(80);
       if (error) {
@@ -227,6 +237,17 @@ export function ResearchLibraryPage({ accessState }: { accessState?: ResearchAcc
       const sources = (data ?? []) as Source[];
       setItems(sources);
       setMedia(await loadMedia("research_source", sources.map((item) => item.id)));
+      const { data: tagRows } = await supabase
+        .from("research_source_tags")
+        .select("source_id, taxonomy_terms(name)")
+        .in("source_id", sources.map((item) => item.id));
+      const tagMap = new Map<string, string[]>();
+      ((tagRows ?? []) as any[]).forEach((row) => {
+        const term = Array.isArray(row.taxonomy_terms) ? row.taxonomy_terms[0] : row.taxonomy_terms;
+        if (!term?.name) return;
+        tagMap.set(row.source_id, [...(tagMap.get(row.source_id) ?? []), term.name]);
+      });
+      setTagsBySource(tagMap);
       setMessage("");
     }
     load();
@@ -234,13 +255,19 @@ export function ResearchLibraryPage({ accessState }: { accessState?: ResearchAcc
 
   const years = Array.from(new Set(items.map((item) => item.publication_year).filter(Boolean))).sort((a, b) => Number(b) - Number(a));
   const methods = Array.from(new Set(items.map((item) => item.forming_method).filter(Boolean) as string[])).sort();
+  const materials = Array.from(new Set(items.map((item) => item.material_relevance).filter(Boolean) as string[])).sort();
+  const undercuts = Array.from(new Set(items.map((item) => item.undercut_relevance).filter(Boolean) as string[])).sort();
+  const tags = Array.from(new Set(Array.from(tagsBySource.values()).flat())).sort();
   const filtered = useMemo(() => items.filter((item) => {
-    const text = [item.title, item.author, item.summary, item.principle].join(" ").toLowerCase();
+    const text = [item.title, item.author, item.summary, item.short_note, item.why_it_matters, item.principle, item.research_translation, item.notes].join(" ").toLowerCase();
     return (!query || text.includes(query.toLowerCase()))
       && (!sourceType || item.source_type === sourceType)
       && (!year || String(item.publication_year ?? "") === year)
-      && (!formingMethod || item.forming_method === formingMethod);
-  }), [items, query, sourceType, year, formingMethod]);
+      && (!formingMethod || item.forming_method === formingMethod)
+      && (!materialRelevance || item.material_relevance === materialRelevance)
+      && (!undercutRelevance || item.undercut_relevance === undercutRelevance)
+      && (!tag || (tagsBySource.get(item.id) ?? []).includes(tag));
+  }), [items, query, sourceType, year, formingMethod, materialRelevance, undercutRelevance, tag, tagsBySource]);
 
   return (
     <section className="page-shell">
@@ -254,12 +281,17 @@ export function ResearchLibraryPage({ accessState }: { accessState?: ResearchAcc
         <select value={sourceType} onChange={(event) => setSourceType(event.target.value)}><option value="">All types</option>{sourceTypes.map((type) => <option key={type}>{type}</option>)}</select>
         <select value={year} onChange={(event) => setYear(event.target.value)}><option value="">All years</option>{years.map((item) => <option key={item}>{item}</option>)}</select>
         <select value={formingMethod} onChange={(event) => setFormingMethod(event.target.value)}><option value="">All methods</option>{methods.map((item) => <option key={item}>{item}</option>)}</select>
+        <select value={materialRelevance} onChange={(event) => setMaterialRelevance(event.target.value)}><option value="">All material relevance</option>{materials.map((item) => <option key={item}>{item}</option>)}</select>
+        <select value={undercutRelevance} onChange={(event) => setUndercutRelevance(event.target.value)}><option value="">All undercut relevance</option>{undercuts.map((item) => <option key={item}>{item}</option>)}</select>
+        <select value={tag} onChange={(event) => setTag(event.target.value)}><option value="">All tags</option>{tags.map((item) => <option key={item}>{item}</option>)}</select>
+        <button className={viewMode === "visual" ? "button primary" : "button secondary"} type="button" onClick={() => { setViewMode("visual"); window.localStorage.setItem("research-view-mode", "visual"); }}>Visual</button>
+        <button className={viewMode === "index" ? "button primary" : "button secondary"} type="button" onClick={() => { setViewMode("index"); window.localStorage.setItem("research-view-mode", "index"); }}>Index</button>
       </div>
       {message && <div className="notice">{message}</div>}
       {!message && filtered.length === 0 && (isApprovedAccess(accessState) ? <div className="empty-state"><strong>No research sources yet.</strong><p>Submitted and published research sources will appear here.</p></div> : <PublicEmptyState />)}
-      <div className="research-index">
+      <div className={viewMode === "visual" ? "research-index" : "admin-table"}>
         {filtered.map((item) => (
-          <Link href={`/research/${item.id}`} className="research-card" key={item.id}>
+          <Link href={`/research/${item.id}`} className={viewMode === "visual" ? "research-card" : "library-admin-row"} key={item.id}>
             {firstMedia(media, item.id) ? <img loading="lazy" src={firstMedia(media, item.id)} alt={item.title} /> : <div className="media-placeholder">No image</div>}
             <div>
               <span>{item.source_type || "Source"}{item.publication_year ? ` / ${item.publication_year}` : ""}</span>
@@ -280,11 +312,17 @@ export function ResearchDetailPage({ id }: { id: string }) {
   const [media, setMedia] = useState<LibraryMedia[]>([]);
   const [atlas, setAtlas] = useState<AtlasEntry[]>([]);
   const [experiments, setExperiments] = useState<ExperimentLink[]>([]);
+  const [approved, setApproved] = useState(false);
   const [message, setMessage] = useState("Loading...");
 
   useEffect(() => {
     async function load() {
       const supabase = createClient();
+      const { data: auth } = await supabase.auth.getUser();
+      if (auth.user) {
+        const { data: profile } = await supabase.from("profiles").select("approval_status, is_active").eq("id", auth.user.id).single();
+        setApproved(profile?.approval_status === "approved" && profile.is_active !== false);
+      }
       const { data, error } = await supabase.from("research_sources").select("*").eq("id", id).single();
       if (error || !data) {
         setMessage("RESEARCH ACCESS REQUIRED");
@@ -308,7 +346,10 @@ export function ResearchDetailPage({ id }: { id: string }) {
     <section className="page-shell experiment-detail">
       <div className="detail-head">
         <div><p className="eyebrow">{item.source_type || "Research Source"}</p><h1>{item.title}</h1><p className="lede">{item.summary}</p></div>
-        <StatusPill status={item.status || (item.is_published ? "published" : "draft")} />
+        <div className="detail-actions">
+          <StatusPill status={item.status || (item.is_published ? "published" : "draft")} />
+          {approved && item.citation && <CopyCitationButton citation={item.citation} />}
+        </div>
       </div>
       <div className="facts-grid">
         <DetailPair label="Author" value={item.author || "Unknown"} />
@@ -347,6 +388,8 @@ function Related({ title, items }: { title: string; items: { href: string; title
 export function DynamicAtlasPage({ fallback, accessState, allowFallback = false }: { fallback: { code: string; title: string; items: string[] }[]; accessState?: ResearchAccessState; allowFallback?: boolean }) {
   const [categories, setCategories] = useState<AtlasCategory[]>([]);
   const [entries, setEntries] = useState<AtlasEntry[]>([]);
+  const [media, setMedia] = useState(new Map<string, LibraryMedia[]>());
+  const [query, setQuery] = useState("");
   const [useFallback, setUseFallback] = useState(false);
 
   useEffect(() => {
@@ -359,10 +402,14 @@ export function DynamicAtlasPage({ fallback, accessState, allowFallback = false 
         return;
       }
       setCategories((categoryData ?? []) as AtlasCategory[]);
-      setEntries((entryData ?? []) as AtlasEntry[]);
+      const atlasEntries = (entryData ?? []) as AtlasEntry[];
+      setEntries(atlasEntries);
+      setMedia(await loadMedia("atlas_entry", atlasEntries.map((entry) => entry.id)));
     }
     load();
   }, [allowFallback]);
+
+  const filteredEntries = entries.filter((entry) => [entry.title, entry.short_description, entry.description, entry.principle, entry.research_relevance, entry.atlas_categories?.title].join(" ").toLowerCase().includes(query.toLowerCase()));
 
   return (
     <section className="page-shell">
@@ -371,6 +418,7 @@ export function DynamicAtlasPage({ fallback, accessState, allowFallback = false 
         <h1>Methods, materials, tool systems, and behaviors</h1>
         <p>The Atlas is an editable knowledge network connecting precedent, principle, tool translation, experiment, and next test.</p>
       </div>
+      {!useFallback && categories.length > 0 && <div className="filter-bar"><input placeholder="Search Atlas entries, principles, relevance" value={query} onChange={(event) => setQuery(event.target.value)} /></div>}
       {useFallback ? (
         <div className="atlas-grid">
           {fallback.map((group) => (
@@ -384,8 +432,9 @@ export function DynamicAtlasPage({ fallback, accessState, allowFallback = false 
           {categories.map((category) => (
             <article className="atlas-card" key={category.id}>
               <div className="atlas-card-head"><span>{category.code}</span><h2>{category.title}</h2></div>
+              <small>{filteredEntries.filter((entry) => entry.category_id === category.id).length} entries</small>
               {category.description && <p>{category.description}</p>}
-              <ul>{entries.filter((entry) => entry.category_id === category.id).map((entry) => <li key={entry.id}><Link href={`/atlas/${entry.id}`}>{entry.title}</Link>{entry.short_description && <small>{entry.short_description}</small>}</li>)}</ul>
+              <ul>{filteredEntries.filter((entry) => entry.category_id === category.id).map((entry) => <li key={entry.id}>{firstMedia(media, entry.id) && <img loading="lazy" src={firstMedia(media, entry.id)} alt={entry.title} />}<Link href={`/atlas/${entry.id}`}>{entry.title}</Link>{entry.short_description && <small>{entry.short_description}</small>}</li>)}</ul>
             </article>
           ))}
         </div>
@@ -508,10 +557,16 @@ export function MaterialDetailPage({ id }: { id: string }) {
   const [media, setMedia] = useState<LibraryMedia[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [message, setMessage] = useState("Loading...");
+  const [approved, setApproved] = useState(false);
 
   useEffect(() => {
     async function load() {
       const supabase = createClient();
+      const { data: auth } = await supabase.auth.getUser();
+      if (auth.user) {
+        const { data: profile } = await supabase.from("profiles").select("approval_status, is_active").eq("id", auth.user.id).single();
+        setApproved(profile?.approval_status === "approved" && profile.is_active !== false);
+      }
       const { data, error } = await supabase.from("materials").select("*").eq("id", id).single();
       if (error || !data) {
         setMessage("RESEARCH ACCESS REQUIRED");
@@ -529,12 +584,12 @@ export function MaterialDetailPage({ id }: { id: string }) {
   if (!item) return <section className="page-shell narrow-shell"><div className="notice">{message}</div></section>;
   return (
     <section className="page-shell experiment-detail">
-      <div className="detail-head"><div><p className="eyebrow">Material Identity</p><h1>{item.name}</h1><p className="lede">{item.description}</p></div><StatusPill status={item.status || "draft"} /></div>
+      <div className="detail-head"><div><p className="eyebrow">Material Identity</p><h1>{item.name}</h1><p className="lede">{item.description}</p></div><div className="detail-actions"><StatusPill status={item.status || "draft"} />{approved && <Link className="button" href={`/contribute/products/new?material=${id}`}>+ ADD PRODUCT FOR THIS MATERIAL</Link>}</div></div>
       <div className="facts-grid"><DetailPair label="Family" value={item.material_family} /><DetailPair label="Grade" value={item.alloy_grade} /><DetailPair label="Temper" value={item.temper_condition} /><DetailPair label="Thickness" value={[item.thickness_min_mm, item.thickness_max_mm].filter((value) => value !== null).join(" - ")} /><DetailPair label="Hardness" value={item.hardness} /><DetailPair label="Shore" value={item.shore_hardness} /></div>
       <MediaGrid items={media} />
-      <section className="detail-section grid-2"><div><p className="section-index">Forming notes</p><p>{item.forming_notes || "No forming notes."}</p></div><div><p className="section-index">Annealing notes</p><p>{item.annealing_notes || "No annealing notes."}</p></div></section>
-      <section className="detail-section grid-2"><div><p className="section-index">Surface / safety</p><p>{[item.surface_notes, item.safety_notes].filter(Boolean).join(" ") || "No surface or safety notes."}</p></div><div><p className="section-index">Research notes</p><p>{item.research_notes || item.elastic_modulus_notes || "No research notes."}</p></div></section>
-      <Related title="Related products" items={products.map((product) => ({ href: `/resources/products/${product.id}`, title: product.product_name, detail: [product.manufacturer, product.vendors?.name, product.price ? `${product.currency || "USD"} ${product.price}` : null].filter(Boolean).join(" / ") }))} />
+      <section className="detail-section grid-2"><div><p className="section-index">Material Properties / Notes</p><p>{item.elastic_modulus_notes || item.description || "No material notes."}</p></div><div><p className="section-index">Forming Behavior</p><p>{item.forming_notes || "No forming notes."}</p></div></section>
+      <section className="detail-section grid-2"><div><p className="section-index">Surface / safety</p><p>{[item.surface_notes, item.safety_notes].filter(Boolean).join(" ") || "No surface or safety notes."}</p></div><div><p className="section-index">Research notes</p><p>{item.research_notes || item.annealing_notes || "No research notes."}</p></div></section>
+      <Related title="Products Used in Lab" items={products.map((product) => ({ href: `/resources/products/${product.id}`, title: product.product_name, detail: [product.manufacturer, product.vendors?.name, product.price ? `${product.currency || "USD"} ${product.price}` : null].filter(Boolean).join(" / ") }))} />
       <RelatedLinks table="atlas_entry_materials" column="material_id" id={id} type="atlas" />
       <RelatedLinks table="experiment_materials" column="material_id" id={id} type="experiment" />
     </section>
@@ -578,10 +633,13 @@ export function ProductsPage({ accessState }: { accessState?: ResearchAccessStat
 export function ProductDetailPage({ id }: { id: string }) {
   const [item, setItem] = useState<Product | null>(null);
   const [media, setMedia] = useState<LibraryMedia[]>([]);
+  const [alternatives, setAlternatives] = useState<Product[]>([]);
+  const [approved, setApproved] = useState(false);
   const [message, setMessage] = useState("Loading...");
-  useEffect(() => { async function load() { const supabase = createClient(); const { data, error } = await supabase.from("products").select("*, materials(id, name), vendors(id, name, website_url)").eq("id", id).single(); if (error || !data) { setMessage("RESEARCH ACCESS REQUIRED"); return; } setItem(data as Product); setMedia((await loadMedia("product", [id])).get(id) ?? []); setMessage(""); } load(); }, [id]);
+  useEffect(() => { async function load() { const supabase = createClient(); const { data: auth } = await supabase.auth.getUser(); if (auth.user) { const { data: profile } = await supabase.from("profiles").select("approval_status, is_active").eq("id", auth.user.id).single(); setApproved(profile?.approval_status === "approved" && profile.is_active !== false); } const { data, error } = await supabase.from("products").select("*, materials(id, name), vendors(id, name, website_url)").eq("id", id).single(); if (error || !data) { setMessage("RESEARCH ACCESS REQUIRED"); return; } setItem(data as Product); setMedia((await loadMedia("product", [id])).get(id) ?? []); const { data: altRows } = await supabase.from("product_alternatives").select("products!product_alternatives_alternative_product_id_fkey(*, materials(id, name), vendors(id, name, website_url))").eq("product_id", id); setAlternatives(((altRows ?? []) as any[]).map((row) => Array.isArray(row.products) ? row.products[0] : row.products).filter(Boolean) as Product[]); setMessage(""); } load(); }, [id]);
   if (!item) return <section className="page-shell narrow-shell"><div className="notice">{message}</div></section>;
-  return <section className="page-shell experiment-detail"><div className="detail-head"><div><p className="eyebrow">Product</p><h1>{item.product_name}</h1><p className="lede">{item.package_description}</p></div><StatusPill status={item.status || "draft"} /></div><div className="facts-grid"><DetailPair label="Manufacturer" value={item.manufacturer} /><DetailPair label="Material" value={item.materials?.name} /><DetailPair label="Vendor" value={item.vendors?.name} /><DetailPair label="Vendor SKU" value={item.vendor_sku} /><DetailPair label="Price" value={item.price ? `${item.currency || "USD"} ${item.price}` : null} /><DetailPair label="Checked" value={item.price_checked_at ? new Date(item.price_checked_at).toLocaleDateString() : null} /></div><MediaGrid items={media} /><section className="detail-section grid-2"><div><p className="section-index">Nominal dimensions</p><p>{[item.nominal_thickness_mm && `${item.nominal_thickness_mm} mm thick`, item.nominal_width_mm && `${item.nominal_width_mm} mm wide`, item.nominal_length_mm && `${item.nominal_length_mm} mm long`, item.filament_diameter_mm && `${item.filament_diameter_mm} mm filament`].filter(Boolean).join(" / ") || "No dimensions recorded."}</p></div><div><p className="section-index">Reorder</p><p><SafeLink href={item.product_url}>Purchase / reorder</SafeLink> <SafeLink href={item.manufacturer_url}>Manufacturer</SafeLink> <SafeLink href={item.vendors?.website_url ?? null}>Vendor website</SafeLink></p></div></section><RelatedLinks table="experiment_products" column="product_id" id={id} type="experiment" /></section>;
+  const reorder = approved && typeof item.quantity_in_lab === "number" && typeof item.reorder_level === "number" && item.quantity_in_lab <= item.reorder_level;
+  return <section className="page-shell experiment-detail"><div className="detail-head"><div><p className="eyebrow">Product</p><h1>{item.product_name}</h1><p className="lede">{item.package_description}</p></div><div className="detail-actions"><StatusPill status={item.status || "draft"} />{reorder && <span className="status-pill">REORDER</span>}</div></div><div className="facts-grid"><DetailPair label="Manufacturer" value={item.manufacturer} /><DetailPair label="Material" value={item.materials?.name} /><DetailPair label="Vendor" value={item.vendors?.name} /><DetailPair label="Vendor SKU" value={item.vendor_sku} /><DetailPair label="Price" value={item.price ? `${item.currency || "USD"} ${item.price}` : null} /><DetailPair label="Checked" value={item.price_checked_at ? new Date(item.price_checked_at).toLocaleDateString() : null} /></div><MediaGrid items={media} /><section className="detail-section grid-2"><div><p className="section-index">Nominal dimensions</p><p>{[item.nominal_thickness_mm && `${item.nominal_thickness_mm} mm thick`, item.nominal_width_mm && `${item.nominal_width_mm} mm wide`, item.nominal_length_mm && `${item.nominal_length_mm} mm long`, item.filament_diameter_mm && `${item.filament_diameter_mm} mm filament`].filter(Boolean).join(" / ") || "No dimensions recorded."}</p></div><div><p className="section-index">Links</p><p><SafeLink href={item.product_url}>Purchase / reorder</SafeLink> <SafeLink href={item.manufacturer_url}>Manufacturer</SafeLink> <SafeLink href={item.vendors?.website_url ?? null}>Vendor website</SafeLink></p></div></section>{approved && <section className="detail-section"><p className="section-index">LAB / REORDER</p><div className="facts-grid"><DetailPair label="Quantity in Lab" value={item.quantity_in_lab} /><DetailPair label="Reorder Level" value={item.reorder_level} /><DetailPair label="Vendor" value={item.vendors?.name} /><DetailPair label="Recorded Price" value={item.price ? `${item.currency || "USD"} ${item.price}` : null} /><DetailPair label="Price Checked" value={item.price_checked_at ? new Date(item.price_checked_at).toLocaleDateString() : null} /><DetailPair label="Purchase Link" value={<SafeLink href={item.product_url}>Open link</SafeLink>} /></div></section>}<Related title="Alternative Products" items={alternatives.map((product) => ({ href: `/resources/products/${product.id}`, title: product.product_name, detail: [product.manufacturer, product.materials?.name, product.vendors?.name].filter(Boolean).join(" / ") }))} /><RelatedLinks table="experiment_products" column="product_id" id={id} type="experiment" /></section>;
 }
 
 export function EquipmentPage({ accessState }: { accessState?: ResearchAccessState }) {

@@ -102,7 +102,8 @@ export function AdminLibraryList({ kind }: { kind: AdminKind }) {
 
 export function LibraryReviewPage() {
   const [isAdmin, setIsAdmin] = useState(false);
-  const [items, setItems] = useState<{ id: string; title: string; group: string; table: string; open: string; edit: string; updated_at?: string | null; status: string }[]>([]);
+  const [items, setItems] = useState<{ id: string; title: string; group: string; table: string; open: string; edit: string; updated_at?: string | null; status: string; visibility?: string | null; summary?: string | null; contributor?: string | null }[]>([]);
+  const [selected, setSelected] = useState(new Set<string>());
   const [message, setMessage] = useState("Loading...");
 
   async function load() {
@@ -113,18 +114,18 @@ export function LibraryReviewPage() {
     if (profile?.role !== "admin") { setMessage("Administrator access required."); return; }
     setIsAdmin(true);
     const [research, materials, products, equipment, atlas] = await Promise.all([
-      supabase.from("research_sources").select("id, title, updated_at, status").eq("status", "submitted"),
-      supabase.from("materials").select("id, name, updated_at, status").eq("status", "submitted"),
-      supabase.from("products").select("id, product_name, updated_at, status").eq("status", "submitted"),
-      supabase.from("equipment").select("id, name, updated_at, status").eq("status", "submitted"),
-      supabase.from("atlas_entries").select("id, title, updated_at, status").eq("status", "submitted"),
+      supabase.from("research_sources").select("id, title, author, summary, short_note, updated_at, status, visibility").eq("status", "submitted"),
+      supabase.from("materials").select("id, name, material_family, description, updated_at, status, visibility").eq("status", "submitted"),
+      supabase.from("products").select("id, product_name, manufacturer, package_description, updated_at, status, visibility").eq("status", "submitted"),
+      supabase.from("equipment").select("id, name, manufacturer, description, updated_at, status, visibility").eq("status", "submitted"),
+      supabase.from("atlas_entries").select("id, title, short_description, updated_at, status, visibility").eq("status", "submitted"),
     ]);
     setItems([
-      ...((research.data ?? []) as unknown as { id: string; title: string; updated_at: string; status: string }[]).map((item) => ({ id: item.id, title: item.title, group: "RESEARCH", table: "research_sources", open: `/research/${item.id}`, edit: `/contribute/research/${item.id}/edit`, updated_at: item.updated_at, status: item.status })),
-      ...((materials.data ?? []) as unknown as { id: string; name: string; updated_at: string; status: string }[]).map((item) => ({ id: item.id, title: item.name, group: "MATERIAL", table: "materials", open: `/materials/${item.id}`, edit: `/contribute/materials/${item.id}/edit`, updated_at: item.updated_at, status: item.status })),
-      ...((products.data ?? []) as unknown as { id: string; product_name: string; updated_at: string; status: string }[]).map((item) => ({ id: item.id, title: item.product_name, group: "PRODUCT", table: "products", open: `/resources/products/${item.id}`, edit: `/contribute/products/${item.id}/edit`, updated_at: item.updated_at, status: item.status })),
-      ...((equipment.data ?? []) as unknown as { id: string; name: string; updated_at: string; status: string }[]).map((item) => ({ id: item.id, title: item.name, group: "EQUIPMENT", table: "equipment", open: `/resources/equipment/${item.id}`, edit: `/contribute/equipment/${item.id}/edit`, updated_at: item.updated_at, status: item.status })),
-      ...((atlas.data ?? []) as unknown as { id: string; title: string; updated_at: string; status: string }[]).map((item) => ({ id: item.id, title: item.title, group: "ATLAS", table: "atlas_entries", open: `/atlas/${item.id}`, edit: `/contribute/atlas/${item.id}/edit`, updated_at: item.updated_at, status: item.status })),
+      ...((research.data ?? []) as any[]).map((item) => ({ id: item.id, title: item.title, group: "RESEARCH", table: "research_sources", open: `/research/${item.id}`, edit: `/contribute/research/${item.id}/edit`, updated_at: item.updated_at, status: item.status, visibility: item.visibility, summary: item.summary || item.short_note, contributor: item.author })),
+      ...((materials.data ?? []) as any[]).map((item) => ({ id: item.id, title: item.name, group: "MATERIAL", table: "materials", open: `/materials/${item.id}`, edit: `/contribute/materials/${item.id}/edit`, updated_at: item.updated_at, status: item.status, visibility: item.visibility, summary: item.description, contributor: item.material_family })),
+      ...((products.data ?? []) as any[]).map((item) => ({ id: item.id, title: item.product_name, group: "PRODUCT", table: "products", open: `/resources/products/${item.id}`, edit: `/contribute/products/${item.id}/edit`, updated_at: item.updated_at, status: item.status, visibility: item.visibility, summary: item.package_description, contributor: item.manufacturer })),
+      ...((equipment.data ?? []) as any[]).map((item) => ({ id: item.id, title: item.name, group: "EQUIPMENT", table: "equipment", open: `/resources/equipment/${item.id}`, edit: `/contribute/equipment/${item.id}/edit`, updated_at: item.updated_at, status: item.status, visibility: item.visibility, summary: item.description, contributor: item.manufacturer })),
+      ...((atlas.data ?? []) as any[]).map((item) => ({ id: item.id, title: item.title, group: "ATLAS", table: "atlas_entries", open: `/atlas/${item.id}`, edit: `/contribute/atlas/${item.id}/edit`, updated_at: item.updated_at, status: item.status, visibility: item.visibility, summary: item.short_description })),
     ]);
     setMessage("");
   }
@@ -137,8 +138,23 @@ export function LibraryReviewPage() {
     if (error) setMessage(error.message); else await load();
   }
 
+  async function setVisibility(item: { id: string; table: string }, visibility: "internal" | "public") {
+    if (visibility === "public" && !window.confirm("Make this record visible on the public internet?")) return;
+    const supabase = createClient();
+    const { error } = await supabase.from(item.table).update({ visibility }).eq("id", item.id);
+    if (error) setMessage(error.message); else await load();
+  }
+
+  async function setSelectedInternal() {
+    const selectedItems = items.filter((item) => selected.has(`${item.table}:${item.id}`));
+    const supabase = createClient();
+    for (const item of selectedItems) await supabase.from(item.table).update({ visibility: "internal" }).eq("id", item.id);
+    setSelected(new Set());
+    await load();
+  }
+
   if (!isAdmin) return <section className="page-shell narrow-shell"><div className="notice">{message}</div></section>;
-  return <section className="page-shell"><div className="page-heading"><p className="eyebrow">Administration</p><h1>Library Review</h1><p>Submitted research library records awaiting canonical review. Experiment review remains separate.</p></div>{message && <div className="notice">{message}</div>}<div className="admin-table">{items.map((item) => <div className="library-admin-row" key={`${item.group}-${item.id}`}><span><strong>{item.title}</strong><small>{item.group}</small></span><span>{item.updated_at ? new Date(item.updated_at).toLocaleDateString() : "-"}</span><span><StatusPill status={item.status} /></span><span className="inline-actions"><Link href={item.open}>Open</Link><Link href={item.edit}>Edit</Link><button type="button" onClick={() => setStatus(item, "draft")}>Return to Draft</button><button type="button" onClick={() => setStatus(item, "reviewed")}>Mark Reviewed</button><button type="button" onClick={() => setStatus(item, "published")}>Publish</button></span></div>)}</div></section>;
+  return <section className="page-shell"><div className="page-heading"><p className="eyebrow">Administration</p><h1>Library Review</h1><p>Submitted research library records awaiting canonical review. Experiment review remains separate.</p></div><div className="filter-bar"><button className="button" type="button" disabled={selected.size === 0} onClick={setSelectedInternal}>Set Selected Internal</button></div>{message && <div className="notice">{message}</div>}<div className="admin-table">{items.map((item) => { const key = `${item.table}:${item.id}`; return <div className="library-admin-row" key={`${item.group}-${item.id}`}><label><input type="checkbox" checked={selected.has(key)} onChange={(event) => setSelected((current) => { const next = new Set(current); if (event.target.checked) next.add(key); else next.delete(key); return next; })} /> <strong>{item.title}</strong><small>{item.group} / {item.contributor || "No contributor"} / {item.summary || "No summary"}</small></label><span>{item.updated_at ? new Date(item.updated_at).toLocaleDateString() : "-"}</span><span><StatusPill status={item.status} /> <span className="status-pill">{item.visibility || "internal"}</span></span><span className="inline-actions"><Link href={item.open}>Open</Link><Link href={item.edit}>Edit</Link><button type="button" onClick={() => setStatus(item, "draft")}>Return to Draft</button><button type="button" onClick={() => setStatus(item, "reviewed")}>Reviewed</button><button type="button" onClick={() => setStatus(item, "published")}>Publish</button><select value={item.visibility || "internal"} onChange={(event) => setVisibility(item, event.target.value as "internal" | "public")}><option value="internal">Internal</option><option value="public">Public</option></select></span></div>; })}</div></section>;
 }
 
 export function TaxonomyAdminPage() {

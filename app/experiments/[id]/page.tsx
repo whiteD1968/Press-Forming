@@ -6,6 +6,45 @@ import { getResearchAccessState, isApprovedState } from "../../../lib/access";
 
 export const dynamic = "force-dynamic";
 
+function csvValue(value: unknown) {
+  if (value === null || value === undefined) return "";
+  return `"${String(value).replaceAll('"', '""')}"`;
+}
+
+function experimentCsv(experiment: Record<string, unknown>, stages: Record<string, unknown>[]) {
+  const experimentFields = [
+    "code",
+    "title",
+    "status",
+    "visibility",
+    "material_name",
+    "material_condition",
+    "thickness_mm",
+    "forming_method",
+    "geometry_type",
+    "undercut_type",
+    "outcome",
+    "research_question",
+    "research_objective",
+    "summary",
+    "observations",
+    "conclusion",
+  ];
+  const stageFields = [
+    "stage_number",
+    "title",
+    "forming_operation",
+    "tool_material",
+    "press_force_tons",
+    "constraint_type",
+    "observations",
+  ];
+  const headers = ["row_type", ...experimentFields, ...stageFields];
+  const experimentRow = ["experiment", ...experimentFields.map((field) => experiment[field]), ...stageFields.map(() => "")];
+  const stageRows = stages.map((stage) => ["stage", ...experimentFields.map(() => ""), ...stageFields.map((field) => stage[field])]);
+  return [headers, experimentRow, ...stageRows].map((row) => row.map(csvValue).join(",")).join("\r\n");
+}
+
 export default async function ExperimentDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const supabase = await createClient();
@@ -43,17 +82,34 @@ export default async function ExperimentDetail({ params }: { params: Promise<{ i
     .eq("experiment_id", id)
     .order("display_order", { ascending: true });
 
-  const [{ data: parentExperiment }, { data: childExperiments }] = await Promise.all([
+  const [{ data: parentExperiment }, { data: childExperiments }, { data: relatedCandidates }] = await Promise.all([
     experiment.parent_experiment_id
       ? supabase.from("experiments").select("id, code, title").eq("id", experiment.parent_experiment_id).maybeSingle()
       : Promise.resolve({ data: null }),
     supabase.from("experiments").select("id, code, title").eq("parent_experiment_id", id).order("code", { ascending: true }),
+    supabase.from("experiments").select("id, code, title, material_name, forming_method, geometry_type, undercut_type").neq("id", id).limit(80),
   ]);
+
+  const relatedExperiments = (relatedCandidates ?? [])
+    .map((candidate: any) => ({
+      ...candidate,
+      matchScore: [
+        experiment.material_name && candidate.material_name === experiment.material_name,
+        experiment.forming_method && candidate.forming_method === experiment.forming_method,
+        experiment.geometry_type && candidate.geometry_type === experiment.geometry_type,
+        experiment.undercut_type && candidate.undercut_type === experiment.undercut_type,
+      ].filter(Boolean).length,
+    }))
+    .filter((candidate: any) => candidate.matchScore > 0)
+    .sort((a: any, b: any) => b.matchScore - a.matchScore || String(a.code || "").localeCompare(String(b.code || "")))
+    .slice(0, 6);
 
   const mediaWithUrls = await Promise.all((media ?? []).map(async (item: any) => {
     const { data } = await supabase.storage.from("experiment-media").createSignedUrl(item.storage_path, 3600);
     return { ...item, signedUrl: data?.signedUrl ?? null };
   }));
+  const csv = experimentCsv(experiment as Record<string, unknown>, (stages ?? []) as Record<string, unknown>[]);
+  const csvName = `${String(experiment.code || "experiment").replace(/[^a-z0-9_-]+/gi, "-").toLowerCase()}-data.csv`;
 
   return (
     <section className="page-shell experiment-detail">
@@ -67,6 +123,7 @@ export default async function ExperimentDetail({ params }: { params: Promise<{ i
           <StatusPill status={experiment.status} />
           {approved && experiment.visibility && <span className="status-pill">{String(experiment.visibility).toUpperCase()}</span>}
           {approved && <Link className="button" href={`/submit?parent=${experiment.id}`}>CREATE NEXT TEST</Link>}
+          {approved && <a className="button" href={`data:text/csv;charset=utf-8,${encodeURIComponent(csv)}`} download={csvName}>EXPORT DATA</a>}
           {canEdit && <Link className="button" href={`/experiments/${experiment.id}/edit`}>{isAdmin ? "Admin Edit" : "Edit Experiment"}</Link>}
         </div>
       </div>
@@ -95,14 +152,20 @@ export default async function ExperimentDetail({ params }: { params: Promise<{ i
       <section className="detail-section">
         <p className="section-index">Experiment Lineage</p>
         <div className="lineage-list">
-          {parentExperiment && (
-            <Link href={`/experiments/${parentExperiment.id}`}>{parentExperiment.code || "Parent"} / {parentExperiment.title}</Link>
-          )}
-          <div className="lineage-current">{experiment.code || "Current"} / {experiment.title}</div>
+          {parentExperiment && <Link href={`/experiments/${parentExperiment.id}`}>Parent / {parentExperiment.code || "Experiment"} / {parentExperiment.title}</Link>}
+          <div className="lineage-current">Current Experiment / {experiment.code || "Current"} / {experiment.title}</div>
           {(childExperiments ?? []).map((child: any) => (
-            <Link href={`/experiments/${child.id}`} key={child.id}>{child.code || "Next"} / {child.title}</Link>
+            <Link href={`/experiments/${child.id}`} key={child.id}>Child / Next Test / {child.code || "Next"} / {child.title}</Link>
           ))}
           {!parentExperiment && (childExperiments ?? []).length === 0 && <p>No parent or child experiments recorded.</p>}
+        </div>
+      </section>
+
+      <section className="detail-section">
+        <p className="section-index">Related Experiments</p>
+        <div className="related-list">
+          {relatedExperiments.map((related: any) => <Link href={`/experiments/${related.id}`} key={related.id}><strong>{related.code || "Experiment"} / {related.title}</strong><small>{[related.material_name, related.forming_method, related.geometry_type, related.undercut_type].filter(Boolean).join(" / ")}</small></Link>)}
+          {relatedExperiments.length === 0 && <p>No similar experiments found.</p>}
         </div>
       </section>
 
