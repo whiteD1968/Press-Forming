@@ -84,6 +84,7 @@ h2 { font-size: clamp(28px, 3vw, 54px); letter-spacing: -.045em; line-height: 1;
 .experiment-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 18px; font-size: 13px; }
 .status { display: inline-flex; align-items: center; justify-content: center; width: fit-content; border: 1px solid var(--line); padding: 4px 8px; text-transform: uppercase; letter-spacing: .08em; font-size: 10px; }
 .status-published { background: var(--ink); color: white; border-color: var(--ink); }
+.status-pill { display: inline-flex; align-items: center; justify-content: center; width: fit-content; border: 1px solid var(--line); padding: 4px 8px; text-transform: uppercase; letter-spacing: .08em; font-size: 10px; color: var(--muted); }
 
 .detail-head { display: flex; justify-content: space-between; gap: 30px; align-items: flex-start; }
 .detail-head h1 { font-size: clamp(44px, 7vw, 96px); max-width: 1100px; }
@@ -147,7 +148,8 @@ textarea { resize: vertical; }
 .admin-table-head { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .1em; }
 .researcher-row, .experiment-admin-row, .my-experiment-row, .source-row { display: grid; gap: 14px; align-items: center; padding: 16px 0; border-bottom: 1px solid var(--line); }
 .researcher-row { grid-template-columns: 1.1fr 1.4fr 1.3fr .7fr .8fr .8fr; }
-.experiment-admin-row { grid-template-columns: 90px 1.2fr 1fr 1fr .8fr .8fr 1.4fr; }
+.researcher-row-wide { grid-template-columns: 1fr 1.2fr 1fr .8fr .8fr .7fr .8fr .8fr .8fr 1.4fr; }
+.experiment-admin-row { grid-template-columns: 90px 1.2fr 1fr 1fr .8fr .8fr .8fr 1.4fr; }
 .my-experiment-row { grid-template-columns: 90px 1.4fr .8fr .8fr .8fr 1fr; }
 .source-row { grid-template-columns: 1.4fr .7fr 1.4fr .7fr .7fr; }
 .admin-table select, .filter-select { min-height: 38px; padding: 8px 10px; font-size: 14px; }
@@ -169,6 +171,8 @@ textarea { resize: vertical; }
 .library-admin-row { display: grid; grid-template-columns: 1.3fr 1fr .7fr .7fr 1.7fr; gap: 14px; align-items: center; padding: 16px 0; border-bottom: 1px solid var(--line); }
 .library-admin-row strong, .library-admin-row small { display: block; }
 .library-admin-row small { color: var(--muted); margin-top: 4px; }
+.lineage-list { display: grid; gap: 12px; border-left: 1px solid var(--line); padding-left: 18px; }
+.lineage-current { font-weight: 700; }
 .stage-editor-card summary { cursor: pointer; list-style: none; }
 .stage-editor-card summary::-webkit-details-marker { display: none; }
 

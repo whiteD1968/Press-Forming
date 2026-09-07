@@ -29,8 +29,9 @@ export default function EditExperimentPage({ params }: { params: Promise<{ id: s
   async function load(experimentId: string) {
     const supabase = createClient();
     const { data: auth } = await supabase.auth.getUser();
-    if (!auth.user) { setMessage("Sign in to edit this experiment."); return; }
-    const { data: profile } = await supabase.from("profiles").select("role").eq("id", auth.user.id).single();
+    if (!auth.user) { window.location.href = "/login"; return; }
+    const { data: profile } = await supabase.from("profiles").select("role, approval_status, is_active").eq("id", auth.user.id).single();
+    if (!profile || profile.approval_status !== "approved" || profile.is_active === false) { window.location.href = "/access-status"; return; }
     const { data, error } = await supabase.from("experiments").select("*").eq("id", experimentId).single();
     if (error || !data) { setMessage(error?.message ?? "Experiment not found."); return; }
     const record = data as Experiment;

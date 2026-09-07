@@ -1,5 +1,7 @@
 import { LibraryEditor } from "../../../../components/LibraryEditor";
+import { requireApprovedUser } from "../../../../lib/access";
 
-export default function NewProduct() {
+export default async function NewProduct() {
+  await requireApprovedUser();
   return <LibraryEditor kind="product" />;
 }

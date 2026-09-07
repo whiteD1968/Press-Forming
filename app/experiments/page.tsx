@@ -1,10 +1,12 @@
 import Link from "next/link";
 import { createClient } from "../../lib/supabase/server";
 import { StatusPill } from "../../components/StatusPill";
+import { requireApprovedUser } from "../../lib/access";
 
 export const dynamic = "force-dynamic";
 
 export default async function ExperimentsPage() {
+  await requireApprovedUser();
   let experiments: any[] = [];
   let errorMessage = "";
 

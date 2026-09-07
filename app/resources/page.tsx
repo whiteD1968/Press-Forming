@@ -1,5 +1,7 @@
 import { ResourcesPage } from "../../components/LibraryPages";
+import { requireApprovedUser } from "../../lib/access";
 
-export default function ResourcesIndex() {
+export default async function ResourcesIndex() {
+  await requireApprovedUser();
   return <ResourcesPage />;
 }

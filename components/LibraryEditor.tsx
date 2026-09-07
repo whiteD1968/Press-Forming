@@ -172,12 +172,12 @@ export function LibraryEditor({ kind, id, admin = false }: { kind: Kind; id?: st
         return;
       }
 
-      const { data: profile } = await supabase.from("profiles").select("role, is_active").eq("id", auth.user.id).single();
+      const { data: profile } = await supabase.from("profiles").select("role, is_active, approval_status").eq("id", auth.user.id).single();
       const adminUser = profile?.role === "admin";
       setIsAdmin(adminUser);
 
-      if (!adminUser && !profile?.is_active) {
-        setMessage("Inactive accounts cannot contribute.");
+      if (!adminUser && (profile?.approval_status !== "approved" || !profile?.is_active)) {
+        setMessage("Approved research access is required to contribute.");
         return;
       }
 
@@ -200,7 +200,7 @@ export function LibraryEditor({ kind, id, admin = false }: { kind: Kind; id?: st
 
       if (!id) {
         setAllowed(true);
-        setRecord({ status: "draft", is_published: false, currency: "USD", is_active: true });
+        setRecord({ status: "draft", visibility: "internal", is_published: false, currency: "USD", is_active: true });
         return;
       }
 
@@ -276,6 +276,7 @@ export function LibraryEditor({ kind, id, admin = false }: { kind: Kind; id?: st
     if (kind !== "vendor") {
       payload.status = status;
       payload.is_published = syncPublished(status);
+      payload.visibility = effectiveAdmin ? String(form.get("visibility") || "internal") : "internal";
     } else {
       payload.is_active = form.get("is_active") === "on";
     }
@@ -415,7 +416,21 @@ export function LibraryEditor({ kind, id, admin = false }: { kind: Kind; id?: st
           <fieldset><legend><span>Media</span> Images</legend><MediaGrid items={media} />{allowed && media.map((item) => <button key={item.id} type="button" onClick={() => removeMedia(item)}>Remove {item.caption || "image"}</button>)}<div className="form-grid form-grid-3"><label>Upload image<input name="media" type="file" accept="image/*" multiple disabled={!allowed} /></label><label>External image URL<input name="external_url" disabled={!allowed} /></label><label>Media type<select name="media_type" disabled={!allowed}>{mediaTypes.map((type) => <option key={type}>{type}</option>)}</select></label><label>Caption<input name="media_caption" disabled={!allowed} /></label><label>Credit<input name="media_credit" disabled={!allowed} /></label><label>Source URL<input name="media_source_url" disabled={!allowed} /></label></div></fieldset>
         )}
         {kind === "vendor" && <fieldset><legend><span>Status</span> Vendor status</legend><label><input name="is_active" type="checkbox" defaultChecked={record.is_active !== false} disabled={!allowed} /> Active</label></fieldset>}
-        {(admin || isAdmin) && kind !== "vendor" && <fieldset><legend><span>Status</span> Editorial status</legend><label>Status<select name="status" defaultValue={String(record.status ?? "draft")} disabled={!allowed}>{editorialStatuses.map((status) => <option key={status}>{status}</option>)}</select></label></fieldset>}
+        {(admin || isAdmin) && kind !== "vendor" && (
+          <>
+            <fieldset>
+              <legend><span>Status</span> Editorial status</legend>
+              <label>Status<select name="status" defaultValue={String(record.status ?? "draft")} disabled={!allowed}>{editorialStatuses.map((status) => <option key={status}>{status}</option>)}</select></label>
+            </fieldset>
+            <fieldset>
+              <legend><span>Visibility</span> Audience</legend>
+              <label>Visibility<select name="visibility" defaultValue={String(record.visibility ?? "internal")} disabled={!allowed} onChange={(event) => {
+                if (event.target.value === "public" && !window.confirm("Make this record visible on the public internet?")) event.target.value = "internal";
+              }}><option value="internal">Internal - approved researchers only</option><option value="public">Public - visible on the internet</option></select></label>
+            </fieldset>
+          </>
+        )}
+        {!(admin || isAdmin) && kind !== "vendor" && <div className="notice">Visibility: Internal</div>}
         {kind === "product" && id && isAdmin && (
           <fieldset id="purchase-history">
             <legend><span>Purchase</span> Purchase history</legend>
@@ -440,6 +455,7 @@ export function LibraryEditor({ kind, id, admin = false }: { kind: Kind; id?: st
           {!(admin || isAdmin) && <button className="button primary" type="submit" value="submitted" disabled={busy || !allowed}>Submit for Review</button>}
           {(admin || isAdmin) && <button className="button primary" type="submit" disabled={busy || !allowed}>Save Changes</button>}
           {record.status && <StatusPill status={String(record.status)} />}
+          {kind !== "vendor" && <span className="status-pill">{String(record.visibility ?? "internal").toUpperCase()}</span>}
         </div>
       </form>
     </section>

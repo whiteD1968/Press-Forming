@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { createClient } from "../lib/supabase/client";
 
-type AccountState = "loading" | "public" | "researcher" | "admin";
+type AccountState = "loading" | "public" | "pending" | "rejected" | "inactive" | "researcher" | "admin";
 
 export function AccountNav() {
   const [state, setState] = useState<AccountState>("loading");
@@ -23,11 +23,24 @@ export function AccountNav() {
 
       const { data: profile } = await supabase
         .from("profiles")
-        .select("role")
+        .select("role, approval_status, is_active")
         .eq("id", auth.user.id)
         .single();
 
-      if (mounted) setState(profile?.role === "admin" ? "admin" : "researcher");
+      if (!profile || profile.approval_status === "pending") {
+        if (mounted) setState("pending");
+        return;
+      }
+      if (profile.approval_status === "rejected") {
+        if (mounted) setState("rejected");
+        return;
+      }
+      if (profile.is_active === false) {
+        if (mounted) setState("inactive");
+        return;
+      }
+
+      if (mounted) setState(profile.role === "admin" ? "admin" : "researcher");
     }
 
     loadAccount();
@@ -44,15 +57,24 @@ export function AccountNav() {
 
   return (
     <nav className="main-nav" aria-label="Primary navigation">
-      <Link href="/atlas">Atlas</Link>
-      <Link href="/experiments">Experiments</Link>
-      <Link href="/research">Research</Link>
-      <Link href="/materials">Materials</Link>
-      <Link href="/resources">Resources</Link>
       {state === "loading" ? null : state === "public" ? (
-        <Link href="/login">Login</Link>
+        <>
+          <Link href="/">Home</Link>
+          <Link href="/login">Login</Link>
+        </>
+      ) : state === "pending" || state === "rejected" || state === "inactive" ? (
+        <>
+          <Link href="/">Home</Link>
+          <Link href="/access-status">Access Status</Link>
+          <button className="nav-button" type="button" onClick={signOut}>Sign Out</button>
+        </>
       ) : (
         <>
+          <Link href="/atlas">Atlas</Link>
+          <Link href="/experiments">Experiments</Link>
+          <Link href="/research">Research</Link>
+          <Link href="/materials">Materials</Link>
+          <Link href="/resources">Resources</Link>
           <Link href="/submit">Submit</Link>
           {state === "admin" ? <Link href="/admin">Admin</Link> : <Link href="/my-work">My Work</Link>}
           <button className="nav-button" type="button" onClick={signOut}>Sign Out</button>

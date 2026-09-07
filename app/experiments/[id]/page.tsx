@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "../../../lib/supabase/server";
 import { StatusPill } from "../../../components/StatusPill";
+import { getResearchAccessState, isApprovedState } from "../../../lib/access";
 
 export const dynamic = "force-dynamic";
 
@@ -16,7 +17,11 @@ export default async function ExperimentDetail({ params }: { params: Promise<{ i
     .eq("id", id)
     .single();
 
-  if (!experiment) notFound();
+  if (!experiment) {
+    const access = await getResearchAccessState();
+    if (!isApprovedState(access.state)) return <AccessRequired />;
+    notFound();
+  }
 
   const { data: profile } = auth.user
     ? await supabase.from("profiles").select("role").eq("id", auth.user.id).single()
@@ -37,6 +42,13 @@ export default async function ExperimentDetail({ params }: { params: Promise<{ i
     .eq("experiment_id", id)
     .order("display_order", { ascending: true });
 
+  const [{ data: parentExperiment }, { data: childExperiments }] = await Promise.all([
+    experiment.parent_experiment_id
+      ? supabase.from("experiments").select("id, code, title").eq("id", experiment.parent_experiment_id).maybeSingle()
+      : Promise.resolve({ data: null }),
+    supabase.from("experiments").select("id, code, title").eq("parent_experiment_id", id).order("code", { ascending: true }),
+  ]);
+
   const mediaWithUrls = await Promise.all((media ?? []).map(async (item: any) => {
     const { data } = await supabase.storage.from("experiment-media").createSignedUrl(item.storage_path, 3600);
     return { ...item, signedUrl: data?.signedUrl ?? null };
@@ -52,6 +64,7 @@ export default async function ExperimentDetail({ params }: { params: Promise<{ i
         </div>
         <div className="detail-actions">
           <StatusPill status={experiment.status} />
+          {experiment.visibility && <span className="status-pill">{String(experiment.visibility).toUpperCase()}</span>}
           {canEdit && <Link className="button" href={`/experiments/${experiment.id}/edit`}>{isAdmin ? "Admin Edit" : "Edit Experiment"}</Link>}
         </div>
       </div>
@@ -76,6 +89,20 @@ export default async function ExperimentDetail({ params }: { params: Promise<{ i
           ) : null)}
         </div>
       )}
+
+      <section className="detail-section">
+        <p className="section-index">Experiment Lineage</p>
+        <div className="lineage-list">
+          {parentExperiment && (
+            <Link href={`/experiments/${parentExperiment.id}`}>{parentExperiment.code || "Parent"} / {parentExperiment.title}</Link>
+          )}
+          <div className="lineage-current">{experiment.code || "Current"} / {experiment.title}</div>
+          {(childExperiments ?? []).map((child: any) => (
+            <Link href={`/experiments/${child.id}`} key={child.id}>{child.code || "Next"} / {child.title}</Link>
+          ))}
+          {!parentExperiment && (childExperiments ?? []).length === 0 && <p>No parent or child experiments recorded.</p>}
+        </div>
+      </section>
 
       <section className="detail-section">
         <p className="section-index">Forming sequence</p>
@@ -109,6 +136,19 @@ export default async function ExperimentDetail({ params }: { params: Promise<{ i
           <p>{experiment.failure_notes || "No failure notes recorded."}</p>
         </div>
       </section>
+    </section>
+  );
+}
+
+function AccessRequired() {
+  return (
+    <section className="page-shell narrow-shell">
+      <div className="page-heading">
+        <p className="eyebrow">Research Access Required</p>
+        <h1>RESEARCH ACCESS REQUIRED</h1>
+        <p>This record is available only when a published record has deliberately public visibility or when your account has approved research access.</p>
+      </div>
+      <Link className="button primary" href="/login">Sign In</Link>
     </section>
   );
 }

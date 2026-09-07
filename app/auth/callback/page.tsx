@@ -18,14 +18,31 @@ export default function AuthCallbackPage() {
       }
 
       const supabase = createClient();
-      const { error } = await supabase.auth.exchangeCodeForSession(code);
+      const { data, error } = await supabase.auth.exchangeCodeForSession(code);
 
       if (error) {
         setErrorMessage(error.message);
         return;
       }
 
-      window.location.replace("/submit");
+      const userId = data.user?.id;
+      if (!userId) {
+        window.location.replace("/access-status");
+        return;
+      }
+
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("role, approval_status, is_active")
+        .eq("id", userId)
+        .single();
+
+      if (!profile || profile.approval_status !== "approved" || profile.is_active === false) {
+        window.location.replace("/access-status");
+        return;
+      }
+
+      window.location.replace(profile.role === "admin" ? "/admin" : "/");
     }
 
     confirmAccount();

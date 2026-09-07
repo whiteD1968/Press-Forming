@@ -29,7 +29,22 @@ export default function SubmitPage() {
 
   useEffect(() => {
     const supabase = createClient();
-    supabase.auth.getUser().then(({ data }) => setUserId(data.user?.id ?? null));
+    supabase.auth.getUser().then(async ({ data }) => {
+      if (!data.user) {
+        window.location.href = "/login";
+        return;
+      }
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("approval_status, is_active")
+        .eq("id", data.user.id)
+        .single();
+      if (!profile || profile.approval_status !== "approved" || profile.is_active === false) {
+        window.location.href = "/access-status";
+        return;
+      }
+      setUserId(data.user.id);
+    });
     Promise.all([
       supabase.from("materials").select("id, name").order("name"),
       supabase.from("products").select("id, product_name").order("product_name"),

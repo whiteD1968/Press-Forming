@@ -5,7 +5,7 @@ import Link from "next/link";
 import { createClient } from "../../../lib/supabase/client";
 import { StatusPill } from "../../../components/StatusPill";
 
-type ExperimentStatus = "draft" | "submitted" | "reviewed" | "published";
+type ExperimentStatus = "draft" | "submitted" | "reviewed" | "published" | "archived";
 type Experiment = {
   id: string;
   code: string | null;
@@ -13,10 +13,11 @@ type Experiment = {
   researcher_name: string | null;
   material_name: string | null;
   status: ExperimentStatus;
+  visibility: "internal" | "public";
   created_at: string;
 };
 
-const statuses: ExperimentStatus[] = ["draft", "submitted", "reviewed", "published"];
+const statuses: ExperimentStatus[] = ["draft", "submitted", "reviewed", "published", "archived"];
 
 export default function AdminExperimentsPage() {
   const [isAdmin, setIsAdmin] = useState(false);
@@ -42,7 +43,7 @@ export default function AdminExperimentsPage() {
     setIsAdmin(true);
     const { data, error } = await supabase
       .from("experiments")
-      .select("id, code, title, researcher_name, material_name, status, created_at")
+      .select("id, code, title, researcher_name, material_name, status, visibility, created_at")
       .order("created_at", { ascending: false });
 
     if (error) {
@@ -66,6 +67,17 @@ export default function AdminExperimentsPage() {
   async function updateStatus(id: string, status: ExperimentStatus) {
     const supabase = createClient();
     const { error } = await supabase.from("experiments").update({ status }).eq("id", id);
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+    await load();
+  }
+
+  async function updateVisibility(id: string, visibility: "internal" | "public") {
+    if (visibility === "public" && !window.confirm("Make this record visible on the public internet?")) return;
+    const supabase = createClient();
+    const { error } = await supabase.from("experiments").update({ visibility }).eq("id", id);
     if (error) {
       setMessage(error.message);
       return;
@@ -97,7 +109,7 @@ export default function AdminExperimentsPage() {
       {message && <div className="notice">{message}</div>}
       <div className="admin-table">
         <div className="admin-table-head experiment-admin-row">
-          <span>Code</span><span>Title</span><span>Researcher</span><span>Material</span><span>Status</span><span>Date</span><span>Actions</span>
+          <span>Code</span><span>Title</span><span>Researcher</span><span>Material</span><span>Status</span><span>Visibility</span><span>Date</span><span>Actions</span>
         </div>
         {filteredItems.map((item) => (
           <div className="experiment-admin-row" key={item.id}>
@@ -106,12 +118,17 @@ export default function AdminExperimentsPage() {
             <span>{item.researcher_name || "-"}</span>
             <span>{item.material_name || "-"}</span>
             <span><StatusPill status={item.status} /></span>
+            <span className="status-pill">{item.visibility.toUpperCase()}</span>
             <span>{new Date(item.created_at).toLocaleDateString()}</span>
             <span className="inline-actions">
               <Link href={`/experiments/${item.id}`}>View</Link>
               <Link href={`/experiments/${item.id}/edit`}>Edit</Link>
               <select value={item.status} onChange={(event) => updateStatus(item.id, event.target.value as ExperimentStatus)}>
                 {statuses.map((status) => <option value={status} key={status}>{status}</option>)}
+              </select>
+              <select value={item.visibility} onChange={(event) => updateVisibility(item.id, event.target.value as "internal" | "public")}>
+                <option value="internal">Internal</option>
+                <option value="public">Public</option>
               </select>
             </span>
           </div>

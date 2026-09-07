@@ -1,7 +1,40 @@
 import Link from "next/link";
 import { processSequence, researchQuestions } from "../lib/research";
+import { getResearchAccessState, isApprovedState } from "../lib/access";
 
-export default function Home() {
+export const dynamic = "force-dynamic";
+
+export default async function Home() {
+  const { state } = await getResearchAccessState();
+
+  if (!isApprovedState(state)) {
+    return (
+      <>
+        <section className="hero">
+          <p className="eyebrow">Architectural Products Lab</p>
+          <h1>Forming Material</h1>
+          <p className="hero-copy">
+            An experimental research platform investigating thin-sheet forming, 3D-printed tooling, compliant tooling, sequential deformation, and undercut geometries.
+          </p>
+          <div className="hero-actions">
+            <Link className="button primary" href="/login">Sign In</Link>
+            <Link className="button" href="/login">Request Research Access</Link>
+          </div>
+        </section>
+
+        <section className="section callout">
+          <div>
+            <p className="section-index">Research Access</p>
+            <h2>The working archive is available to approved collaborators.</h2>
+          </div>
+          <p>
+            The Forming Material archive contains ongoing experimental research, fabrication methods, material knowledge, and lab resources that require confirmed and approved research access.
+          </p>
+        </section>
+      </>
+    );
+  }
+
   return (
     <>
       <section className="hero">
