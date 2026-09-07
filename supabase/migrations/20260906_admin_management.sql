@@ -81,6 +81,29 @@ as $$
   );
 $$;
 
+create or replace function public.protect_profile_admin_fields()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if new.role is distinct from old.role
+    or new.is_active is distinct from old.is_active then
+    if not public.is_admin() then
+      raise exception 'Only administrators can change roles or account status';
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_protect_profile_role on public.profiles;
+drop trigger if exists trg_protect_profile_admin_fields on public.profiles;
+create trigger trg_protect_profile_admin_fields
+before update on public.profiles
+for each row execute function public.protect_profile_admin_fields();
+
 drop policy if exists "researchers create experiments" on public.experiments;
 create policy "researchers create experiments"
 on public.experiments for insert
@@ -97,11 +120,20 @@ on public.experiments for update
 to authenticated
 using (
   public.is_admin()
-  or (researcher_id = auth.uid() and public.is_active_user())
+  or (researcher_id = auth.uid() and public.is_active_user() and status in ('draft', 'submitted'))
 )
 with check (
   public.is_admin()
   or (researcher_id = auth.uid() and public.is_active_user() and status in ('draft', 'submitted'))
+);
+
+drop policy if exists "researchers delete own drafts" on public.experiments;
+create policy "researchers delete own drafts"
+on public.experiments for delete
+to authenticated
+using (
+  public.is_admin()
+  or (researcher_id = auth.uid() and public.is_active_user() and status = 'draft')
 );
 
 drop policy if exists "researchers create stages" on public.experiment_stages;
@@ -113,7 +145,7 @@ with check (exists (
   where e.id = experiment_id
     and (
       public.is_admin()
-      or (e.researcher_id = auth.uid() and public.is_active_user())
+      or (e.researcher_id = auth.uid() and public.is_active_user() and e.status in ('draft', 'submitted'))
     )
 ));
 
@@ -126,7 +158,7 @@ using (exists (
   where e.id = experiment_id
     and (
       public.is_admin()
-      or (e.researcher_id = auth.uid() and public.is_active_user())
+      or (e.researcher_id = auth.uid() and public.is_active_user() and e.status in ('draft', 'submitted'))
     )
 ))
 with check (exists (
@@ -134,7 +166,7 @@ with check (exists (
   where e.id = experiment_id
     and (
       public.is_admin()
-      or (e.researcher_id = auth.uid() and public.is_active_user())
+      or (e.researcher_id = auth.uid() and public.is_active_user() and e.status in ('draft', 'submitted'))
     )
 ));
 
@@ -147,7 +179,7 @@ using (exists (
   where e.id = experiment_id
     and (
       public.is_admin()
-      or (e.researcher_id = auth.uid() and public.is_active_user())
+      or (e.researcher_id = auth.uid() and public.is_active_user() and e.status in ('draft', 'submitted'))
     )
 ));
 
@@ -162,8 +194,54 @@ with check (
     where e.id = experiment_id
       and (
         public.is_admin()
-        or (e.researcher_id = auth.uid() and public.is_active_user())
+        or (e.researcher_id = auth.uid() and public.is_active_user() and e.status in ('draft', 'submitted'))
       )
+  )
+);
+
+drop policy if exists "researchers edit media metadata" on public.experiment_media;
+create policy "researchers edit media metadata"
+on public.experiment_media for update
+to authenticated
+using (
+  public.is_admin()
+  or (
+    created_by = auth.uid()
+    and exists (
+      select 1 from public.experiments e
+      where e.id = experiment_id
+        and e.researcher_id = auth.uid()
+        and public.is_active_user()
+        and e.status in ('draft', 'submitted')
+    )
+  )
+)
+with check (
+  public.is_admin()
+  or (
+    created_by = auth.uid()
+    and exists (
+      select 1 from public.experiments e
+      where e.id = experiment_id
+        and e.researcher_id = auth.uid()
+        and public.is_active_user()
+        and e.status in ('draft', 'submitted')
+    )
+  )
+);
+
+drop policy if exists "researchers delete media metadata" on public.experiment_media;
+create policy "researchers delete media metadata"
+on public.experiment_media for delete
+to authenticated
+using (
+  public.is_admin()
+  or exists (
+    select 1 from public.experiments e
+    where e.id = experiment_id
+      and e.researcher_id = auth.uid()
+      and public.is_active_user()
+      and e.status in ('draft', 'submitted')
   )
 );
 
@@ -173,10 +251,28 @@ on storage.objects for insert
 to authenticated
 with check (
   bucket_id = 'experiment-media'
-  and public.is_active_user()
   and exists (
     select 1 from public.experiments e
     where e.id::text = (storage.foldername(name))[1]
-      and (e.researcher_id = auth.uid() or public.is_admin())
+      and (
+        public.is_admin()
+        or (e.researcher_id = auth.uid() and public.is_active_user() and e.status in ('draft', 'submitted'))
+      )
+  )
+);
+
+drop policy if exists "researchers delete experiment media" on storage.objects;
+create policy "researchers delete experiment media"
+on storage.objects for delete
+to authenticated
+using (
+  bucket_id = 'experiment-media'
+  and exists (
+    select 1 from public.experiments e
+    where e.id::text = (storage.foldername(name))[1]
+      and (
+        public.is_admin()
+        or (e.researcher_id = auth.uid() and public.is_active_user() and e.status in ('draft', 'submitted'))
+      )
   )
 );
