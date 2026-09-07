@@ -6,6 +6,7 @@ import { createClient } from "../lib/supabase/client";
 import { isEditableStatus, LibraryMedia } from "../lib/library";
 import { MediaGrid } from "./MediaGrid";
 import { StatusPill } from "./StatusPill";
+import type { ResearchAccessState } from "../lib/access";
 
 type Source = {
   id: string;
@@ -188,7 +189,21 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   return <section className="detail-section"><p className="section-index">{title}</p>{children}</section>;
 }
 
-export function ResearchLibraryPage() {
+function isApprovedAccess(state?: ResearchAccessState) {
+  return state === "researcher" || state === "admin";
+}
+
+function PublicEmptyState() {
+  return (
+    <div className="empty-state">
+      <strong>Selected research from Forming Material will appear here when released publicly.</strong>
+      <p>Sign in or request access to view the working research archive.</p>
+      <div className="hero-actions"><Link className="button primary" href="/login">Sign In</Link><Link className="button" href="/login">Request Research Access</Link></div>
+    </div>
+  );
+}
+
+export function ResearchLibraryPage({ accessState }: { accessState?: ResearchAccessState }) {
   const [items, setItems] = useState<Source[]>([]);
   const [media, setMedia] = useState(new Map<string, LibraryMedia[]>());
   const [message, setMessage] = useState("Loading...");
@@ -241,6 +256,7 @@ export function ResearchLibraryPage() {
         <select value={formingMethod} onChange={(event) => setFormingMethod(event.target.value)}><option value="">All methods</option>{methods.map((item) => <option key={item}>{item}</option>)}</select>
       </div>
       {message && <div className="notice">{message}</div>}
+      {!message && filtered.length === 0 && (isApprovedAccess(accessState) ? <div className="empty-state"><strong>No research sources yet.</strong><p>Submitted and published research sources will appear here.</p></div> : <PublicEmptyState />)}
       <div className="research-index">
         {filtered.map((item) => (
           <Link href={`/research/${item.id}`} className="research-card" key={item.id}>
@@ -328,7 +344,7 @@ function Related({ title, items }: { title: string; items: { href: string; title
   );
 }
 
-export function DynamicAtlasPage({ fallback }: { fallback: { code: string; title: string; items: string[] }[] }) {
+export function DynamicAtlasPage({ fallback, accessState, allowFallback = false }: { fallback: { code: string; title: string; items: string[] }[]; accessState?: ResearchAccessState; allowFallback?: boolean }) {
   const [categories, setCategories] = useState<AtlasCategory[]>([]);
   const [entries, setEntries] = useState<AtlasEntry[]>([]);
   const [useFallback, setUseFallback] = useState(false);
@@ -339,14 +355,14 @@ export function DynamicAtlasPage({ fallback }: { fallback: { code: string; title
       const { data: categoryData, error: categoryError } = await supabase.from("atlas_categories").select("*").order("sort_order", { ascending: true });
       const { data: entryData, error: entryError } = await supabase.from("atlas_entries").select("*").order("sort_order", { ascending: true });
       if (categoryError || entryError) {
-        setUseFallback(true);
+        setUseFallback(allowFallback);
         return;
       }
       setCategories((categoryData ?? []) as AtlasCategory[]);
       setEntries((entryData ?? []) as AtlasEntry[]);
     }
     load();
-  }, []);
+  }, [allowFallback]);
 
   return (
     <section className="page-shell">
@@ -355,17 +371,25 @@ export function DynamicAtlasPage({ fallback }: { fallback: { code: string; title
         <h1>Methods, materials, tool systems, and behaviors</h1>
         <p>The Atlas is an editable knowledge network connecting precedent, principle, tool translation, experiment, and next test.</p>
       </div>
-      <div className="atlas-grid">
-        {useFallback ? fallback.map((group) => (
-          <article className="atlas-card" key={group.code}><div className="atlas-card-head"><span>{group.code}</span><h2>{group.title}</h2></div><ul>{group.items.map((item) => <li key={item}>{item}</li>)}</ul></article>
-        )) : categories.map((category) => (
-          <article className="atlas-card" key={category.id}>
-            <div className="atlas-card-head"><span>{category.code}</span><h2>{category.title}</h2></div>
-            {category.description && <p>{category.description}</p>}
-            <ul>{entries.filter((entry) => entry.category_id === category.id).map((entry) => <li key={entry.id}><Link href={`/atlas/${entry.id}`}>{entry.title}</Link>{entry.short_description && <small>{entry.short_description}</small>}</li>)}</ul>
-          </article>
-        ))}
-      </div>
+      {useFallback ? (
+        <div className="atlas-grid">
+          {fallback.map((group) => (
+            <article className="atlas-card" key={group.code}><div className="atlas-card-head"><span>{group.code}</span><h2>{group.title}</h2></div><ul>{group.items.map((item) => <li key={item}>{item}</li>)}</ul></article>
+          ))}
+        </div>
+      ) : categories.length === 0 && !isApprovedAccess(accessState) ? (
+        <PublicEmptyState />
+      ) : (
+        <div className="atlas-grid">
+          {categories.map((category) => (
+            <article className="atlas-card" key={category.id}>
+              <div className="atlas-card-head"><span>{category.code}</span><h2>{category.title}</h2></div>
+              {category.description && <p>{category.description}</p>}
+              <ul>{entries.filter((entry) => entry.category_id === category.id).map((entry) => <li key={entry.id}><Link href={`/atlas/${entry.id}`}>{entry.title}</Link>{entry.short_description && <small>{entry.short_description}</small>}</li>)}</ul>
+            </article>
+          ))}
+        </div>
+      )}
       <Lineage />
     </section>
   );
@@ -440,7 +464,7 @@ function Lineage() {
   return <div className="lineage-panel"><p className="section-index">Research lineage</p><div className="lineage"><span>Precedent</span><b>-&gt;</b><span>Principle</span><b>-&gt;</b><span>Tool Translation</span><b>-&gt;</b><span>Experiment</span><b>-&gt;</b><span>Next Test</span></div></div>;
 }
 
-export function MaterialsPage() {
+export function MaterialsPage({ accessState }: { accessState?: ResearchAccessState }) {
   const [items, setItems] = useState<Material[]>([]);
   const [media, setMedia] = useState(new Map<string, LibraryMedia[]>());
   const [query, setQuery] = useState("");
@@ -473,6 +497,7 @@ export function MaterialsPage() {
       <div className="page-heading"><p className="eyebrow">Material Library</p><h1>Materials</h1><p>Scientific and fabrication material identities separated from exact purchasable products.</p></div>
       <div className="filter-bar"><input placeholder="Search materials" value={query} onChange={(event) => setQuery(event.target.value)} /><select value={family} onChange={(event) => setFamily(event.target.value)}><option value="">All families</option>{families.map((item) => <option key={item}>{item}</option>)}</select><select value={grade} onChange={(event) => setGrade(event.target.value)}><option value="">All grades</option>{grades.map((item) => <option key={item}>{item}</option>)}</select></div>
       {message && <div className="notice">{message}</div>}
+      {!message && filtered.length === 0 && (isApprovedAccess(accessState) ? <div className="empty-state"><strong>No materials yet.</strong><p>Material records will appear here after review.</p></div> : <PublicEmptyState />)}
       <div className="research-index">{filtered.map((item) => <Link href={`/materials/${item.id}`} className="research-card" key={item.id}>{firstMedia(media, item.id) ? <img loading="lazy" src={firstMedia(media, item.id)} alt={item.name} /> : <div className="media-placeholder">No image</div>}<div><span>{item.material_family || "Material"}</span><h2>{item.name}</h2><small>{[item.alloy_grade, item.temper_condition].filter(Boolean).join(" / ")}</small><p>{item.forming_notes || item.description || "No notes recorded."}</p><b>{[item.thickness_min_mm, item.thickness_max_mm].filter((value) => value !== null).join(" - ")}{item.thickness_min_mm || item.thickness_max_mm ? " mm" : ""}</b></div></Link>)}</div>
     </section>
   );
@@ -525,7 +550,7 @@ export function ResourcesPage() {
   return <section className="page-shell"><div className="page-heading"><p className="eyebrow">Fabrication Resources</p><h1>Resources</h1><p>The practical layer connecting experiments to the exact products, hardware, and suppliers needed to repeat the work.</p></div><div className="admin-grid">{sections.map((section) => <Link className="admin-tile" href={section.href} key={section.code}><span>{section.code}</span><strong>{section.title}</strong><small>{section.detail}</small></Link>)}</div></section>;
 }
 
-export function ProductsPage() {
+export function ProductsPage({ accessState }: { accessState?: ResearchAccessState }) {
   const [items, setItems] = useState<Product[]>([]);
   const [query, setQuery] = useState("");
   const [material, setMaterial] = useState("");
@@ -547,7 +572,7 @@ export function ProductsPage() {
   const vendors = Array.from(new Set(items.map((item) => item.vendors?.name).filter(Boolean) as string[])).sort();
   const filtered = items.filter((item) => [item.product_name, item.manufacturer, item.vendor_sku, item.manufacturer_product_code].join(" ").toLowerCase().includes(query.toLowerCase()) && (!material || item.materials?.name === material) && (!manufacturer || item.manufacturer === manufacturer) && (!vendor || item.vendors?.name === vendor));
 
-  return <section className="page-shell"><div className="page-heading"><p className="eyebrow">Fabrication Resources</p><h1>Products</h1><p>Exact commercial products linked to materials, vendors, dimensions, and reorder URLs.</p></div><div className="filter-bar"><input placeholder="Search products, manufacturer, SKU" value={query} onChange={(event) => setQuery(event.target.value)} /><select value={material} onChange={(event) => setMaterial(event.target.value)}><option value="">All materials</option>{materials.map((item) => <option key={item}>{item}</option>)}</select><select value={manufacturer} onChange={(event) => setManufacturer(event.target.value)}><option value="">All manufacturers</option>{manufacturers.map((item) => <option key={item}>{item}</option>)}</select><select value={vendor} onChange={(event) => setVendor(event.target.value)}><option value="">All vendors</option>{vendors.map((item) => <option key={item}>{item}</option>)}</select></div>{message && <div className="notice">{message}</div>}<div className="experiment-list">{filtered.map((item) => <Link href={`/resources/products/${item.id}`} className="experiment-row" key={item.id}><div className="experiment-code">{item.vendor_sku || item.manufacturer_product_code || "PRODUCT"}</div><div className="experiment-main"><h2>{item.product_name}</h2><p>{[item.manufacturer, item.materials?.name, item.package_description].filter(Boolean).join(" / ")}</p></div><div className="experiment-meta"><span>{item.vendors?.name || "-"}</span><span>{item.price ? `${item.currency || "USD"} ${item.price}` : "-"}</span><span>{item.price_checked_at ? new Date(item.price_checked_at).toLocaleDateString() : "-"}</span><span>Reorder</span></div></Link>)}</div></section>;
+  return <section className="page-shell"><div className="page-heading"><p className="eyebrow">Fabrication Resources</p><h1>Products</h1><p>Exact commercial products linked to materials, vendors, dimensions, and reorder URLs.</p></div><div className="filter-bar"><input placeholder="Search products, manufacturer, SKU" value={query} onChange={(event) => setQuery(event.target.value)} /><select value={material} onChange={(event) => setMaterial(event.target.value)}><option value="">All materials</option>{materials.map((item) => <option key={item}>{item}</option>)}</select><select value={manufacturer} onChange={(event) => setManufacturer(event.target.value)}><option value="">All manufacturers</option>{manufacturers.map((item) => <option key={item}>{item}</option>)}</select><select value={vendor} onChange={(event) => setVendor(event.target.value)}><option value="">All vendors</option>{vendors.map((item) => <option key={item}>{item}</option>)}</select></div>{message && <div className="notice">{message}</div>}{!message && filtered.length === 0 && (isApprovedAccess(accessState) ? <div className="empty-state"><strong>No products yet.</strong><p>Product records will appear here after review.</p></div> : <PublicEmptyState />)}<div className="experiment-list">{filtered.map((item) => <Link href={`/resources/products/${item.id}`} className="experiment-row" key={item.id}><div className="experiment-code">{item.vendor_sku || item.manufacturer_product_code || "PRODUCT"}</div><div className="experiment-main"><h2>{item.product_name}</h2><p>{[item.manufacturer, item.materials?.name, item.package_description].filter(Boolean).join(" / ")}</p></div><div className="experiment-meta"><span>{item.vendors?.name || "-"}</span><span>{item.price ? `${item.currency || "USD"} ${item.price}` : "-"}</span><span>{item.price_checked_at ? new Date(item.price_checked_at).toLocaleDateString() : "-"}</span><span>Reorder</span></div></Link>)}</div></section>;
 }
 
 export function ProductDetailPage({ id }: { id: string }) {
@@ -559,12 +584,12 @@ export function ProductDetailPage({ id }: { id: string }) {
   return <section className="page-shell experiment-detail"><div className="detail-head"><div><p className="eyebrow">Product</p><h1>{item.product_name}</h1><p className="lede">{item.package_description}</p></div><StatusPill status={item.status || "draft"} /></div><div className="facts-grid"><DetailPair label="Manufacturer" value={item.manufacturer} /><DetailPair label="Material" value={item.materials?.name} /><DetailPair label="Vendor" value={item.vendors?.name} /><DetailPair label="Vendor SKU" value={item.vendor_sku} /><DetailPair label="Price" value={item.price ? `${item.currency || "USD"} ${item.price}` : null} /><DetailPair label="Checked" value={item.price_checked_at ? new Date(item.price_checked_at).toLocaleDateString() : null} /></div><MediaGrid items={media} /><section className="detail-section grid-2"><div><p className="section-index">Nominal dimensions</p><p>{[item.nominal_thickness_mm && `${item.nominal_thickness_mm} mm thick`, item.nominal_width_mm && `${item.nominal_width_mm} mm wide`, item.nominal_length_mm && `${item.nominal_length_mm} mm long`, item.filament_diameter_mm && `${item.filament_diameter_mm} mm filament`].filter(Boolean).join(" / ") || "No dimensions recorded."}</p></div><div><p className="section-index">Reorder</p><p><SafeLink href={item.product_url}>Purchase / reorder</SafeLink> <SafeLink href={item.manufacturer_url}>Manufacturer</SafeLink> <SafeLink href={item.vendors?.website_url ?? null}>Vendor website</SafeLink></p></div></section><RelatedLinks table="experiment_products" column="product_id" id={id} type="experiment" /></section>;
 }
 
-export function EquipmentPage() {
+export function EquipmentPage({ accessState }: { accessState?: ResearchAccessState }) {
   const [items, setItems] = useState<Equipment[]>([]);
   const [media, setMedia] = useState(new Map<string, LibraryMedia[]>());
   const [message, setMessage] = useState("Loading...");
   useEffect(() => { async function load() { const supabase = createClient(); const { data, error } = await supabase.from("equipment").select("*").order("name", { ascending: true }).limit(80); if (error) { setMessage(error.message); return; } const equipment = (data ?? []) as Equipment[]; setItems(equipment); setMedia(await loadMedia("equipment", equipment.map((item) => item.id))); setMessage(""); } load(); }, []);
-  return <section className="page-shell"><div className="page-heading"><p className="eyebrow">Fabrication Resources</p><h1>Equipment</h1><p>Fabrication and measurement hardware that shapes, records, and tests the research workflow.</p></div>{message && <div className="notice">{message}</div>}<div className="research-index">{items.map((item) => <Link href={`/resources/equipment/${item.id}`} className="research-card" key={item.id}>{firstMedia(media, item.id) ? <img loading="lazy" src={firstMedia(media, item.id)} alt={item.name} /> : <div className="media-placeholder">No image</div>}<div><span>{item.equipment_type || "Equipment"}</span><h2>{item.name}</h2><small>{[item.manufacturer, item.model].filter(Boolean).join(" / ")}</small><p>{item.description || item.capacity || item.working_envelope || "No description recorded."}</p></div></Link>)}</div></section>;
+  return <section className="page-shell"><div className="page-heading"><p className="eyebrow">Fabrication Resources</p><h1>Equipment</h1><p>Fabrication and measurement hardware that shapes, records, and tests the research workflow.</p></div>{message && <div className="notice">{message}</div>}{!message && items.length === 0 && (isApprovedAccess(accessState) ? <div className="empty-state"><strong>No equipment yet.</strong><p>Equipment records will appear here after review.</p></div> : <PublicEmptyState />)}<div className="research-index">{items.map((item) => <Link href={`/resources/equipment/${item.id}`} className="research-card" key={item.id}>{firstMedia(media, item.id) ? <img loading="lazy" src={firstMedia(media, item.id)} alt={item.name} /> : <div className="media-placeholder">No image</div>}<div><span>{item.equipment_type || "Equipment"}</span><h2>{item.name}</h2><small>{[item.manufacturer, item.model].filter(Boolean).join(" / ")}</small><p>{item.description || item.capacity || item.working_envelope || "No description recorded."}</p></div></Link>)}</div></section>;
 }
 
 export function EquipmentDetailPage({ id }: { id: string }) {

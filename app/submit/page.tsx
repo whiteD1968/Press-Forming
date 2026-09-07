@@ -5,6 +5,7 @@ import { createClient } from "../../lib/supabase/client";
 
 type Stage = Record<string, string>;
 type Option = { id: string; label: string };
+type ParentExperiment = Record<string, string | number | null>;
 
 const stageFields = [
   "title", "forming_operation", "tool_material", "tool_geometry", "tool_process", "tool_hardness",
@@ -26,6 +27,7 @@ export default function SubmitPage() {
   const [equipment, setEquipment] = useState<Option[]>([]);
   const [sources, setSources] = useState<Option[]>([]);
   const [experiments, setExperiments] = useState<Option[]>([]);
+  const [parentExperiment, setParentExperiment] = useState<ParentExperiment | null>(null);
 
   useEffect(() => {
     const supabase = createClient();
@@ -42,6 +44,15 @@ export default function SubmitPage() {
       if (!profile || profile.approval_status !== "approved" || profile.is_active === false) {
         window.location.href = "/access-status";
         return;
+      }
+      const parentId = new URLSearchParams(window.location.search).get("parent");
+      if (parentId) {
+        const { data: parent } = await supabase
+          .from("experiments")
+          .select("id, code, title, material_name, material_condition, thickness_mm, forming_method, geometry_type, undercut_type")
+          .eq("id", parentId)
+          .single();
+        if (parent) setParentExperiment(parent as ParentExperiment);
       }
       setUserId(data.user.id);
     });
@@ -178,14 +189,15 @@ export default function SubmitPage() {
   return (
     <section className="page-shell">
       <div className="page-heading"><p className="eyebrow">Research Portal</p><h1>New experiment</h1><p>Record the forming objective, material setup, staged tool behavior, measurements, and research links.</p></div>
-      <form className="experiment-form" onSubmit={submitExperiment}>
+      {parentExperiment && <div className="notice">PARENT EXPERIMENT<br />{String(parentExperiment.code || "Experiment")} / {String(parentExperiment.title || "")}</div>}
+      <form className="experiment-form" onSubmit={submitExperiment} key={String(parentExperiment?.id ?? "new")}>
         <Fieldset index="01" title="Research question"><div className="form-grid"><Input name="title" label="Title" required /><Input name="researcher_name" label="Researcher" required /><Area name="research_question" label="Research question" /><Area name="research_objective" label="Research objective" /><Area name="hypothesis" label="Hypothesis" /><Area name="summary" label="Short summary" /></div></Fieldset>
-        <Fieldset index="02" title="Sheet / specimen"><div className="form-grid form-grid-3"><Input name="material_name" label="Material" /><Input name="material_condition" label="Material condition" /><Input name="thickness_mm" label="Thickness" type="number" /><Input name="sheet_width_mm" label="Width" type="number" /><Input name="sheet_length_mm" label="Length" type="number" /><Area name="initial_geometry" label="Initial geometry" /></div></Fieldset>
-        <Fieldset index="03" title="Forming strategy"><div className="form-grid form-grid-3"><Input name="forming_method" label="Forming method" /><Input name="geometry_type" label="Geometry type" /><Input name="undercut_type" label="Undercut type" /></div></Fieldset>
+        <Fieldset index="02" title="Sheet / specimen"><div className="form-grid form-grid-3"><Input name="material_name" label="Material" defaultValue={String(parentExperiment?.material_name ?? "")} /><Input name="material_condition" label="Material condition" defaultValue={String(parentExperiment?.material_condition ?? "")} /><Input name="thickness_mm" label="Thickness" type="number" defaultValue={String(parentExperiment?.thickness_mm ?? "")} /><Input name="sheet_width_mm" label="Width" type="number" /><Input name="sheet_length_mm" label="Length" type="number" /><Area name="initial_geometry" label="Initial geometry" /></div></Fieldset>
+        <Fieldset index="03" title="Forming strategy"><div className="form-grid form-grid-3"><Input name="forming_method" label="Forming method" defaultValue={String(parentExperiment?.forming_method ?? "")} /><Input name="geometry_type" label="Geometry type" defaultValue={String(parentExperiment?.geometry_type ?? "")} /><Input name="undercut_type" label="Undercut type" defaultValue={String(parentExperiment?.undercut_type ?? "")} /></div></Fieldset>
         <Fieldset index="04" title="Press sequence"><div className="stage-editor">{stages.map((stage, index) => <details className="stage-editor-card" open={index === 0} key={index}><summary className="stage-editor-head"><strong>Stage {String(index + 1).padStart(2, "0")}</strong>{stages.length > 1 && <button type="button" onClick={() => setStages((current) => current.filter((_, i) => i !== index))}>Remove</button>}</summary><div className="form-grid form-grid-3">{stageFields.map((field) => field === "observations" || field === "stage_result" || field === "stage_image_notes" ? <label className="full" key={field}>{labelize(field)}<textarea rows={2} value={stage[field]} onChange={(event) => updateStage(index, field, event.target.value)} /></label> : <label key={field}>{labelize(field)}<input type={numericStageFields.has(field) ? "number" : "text"} step="0.01" value={stage[field]} onChange={(event) => updateStage(index, field, event.target.value)} /></label>)}</div></details>)}<button className="button" type="button" onClick={() => setStages((current) => [...current, emptyStage()])}>+ Add press stage</button></div></Fieldset>
         <Fieldset index="05" title="Measured result"><div className="form-grid form-grid-3"><Area name="final_geometry" label="Final geometry" /><Input name="undercut_depth_mm" label="Undercut depth" type="number" /><Input name="undercut_width_mm" label="Undercut width" type="number" /><Input name="undercut_height_mm" label="Undercut height" type="number" /><Input name="lateral_displacement_mm" label="Lateral displacement" type="number" /><Input name="springback_deg" label="Springback" type="number" /><Input name="measured_thickness_min_mm" label="Minimum measured thickness" type="number" /><Input name="max_thinning_percent" label="Maximum thinning %" type="number" /><Input name="wrinkling_severity" label="Wrinkling" /><Input name="surface_condition" label="Surface condition" /><Input name="tool_damage" label="Tool damage" /><Input name="measurement_method" label="Measurement method" /><Input name="ambient_temperature_c" label="Ambient temperature" type="number" /></div></Fieldset>
         <Fieldset index="06" title="Interpretation"><div className="form-grid form-grid-3"><label>Outcome<select name="outcome" defaultValue=""><option value="">Select</option><option>successful</option><option>partial</option><option>failed</option><option>unexpected</option></select></label><Area name="observations" label="General observations" /><Area name="failure_notes" label="Failure notes" /><Area name="conclusion" label="Conclusion" /><Area name="next_test" label="Next test" /><label className="full">Images<input name="media" type="file" accept="image/*" multiple /></label></div></Fieldset>
-        <Fieldset index="07" title="Research links"><div className="form-grid form-grid-3"><Select name="related_material_id" label="Related material" options={materials} /><Input name="material_role" label="Material role" defaultValue="sheet" /><Select name="related_product_id" label="Exact product" options={products} /><Input name="product_role" label="Product role" defaultValue="sheet" /><Select name="related_equipment_id" label="Equipment" options={equipment} /><Input name="equipment_role" label="Equipment role" defaultValue="press" /><Select name="related_source_id" label="Research source" options={sources} /><Input name="source_relationship" label="Source relationship" defaultValue="precedent" /><Select name="parent_experiment_id" label="Parent experiment" options={experiments} /></div></Fieldset>
+        <Fieldset index="07" title="Research links"><div className="form-grid form-grid-3"><Select name="related_material_id" label="Related material" options={materials} /><Input name="material_role" label="Material role" defaultValue="sheet" /><Select name="related_product_id" label="Exact product" options={products} /><Input name="product_role" label="Product role" defaultValue="sheet" /><Select name="related_equipment_id" label="Equipment" options={equipment} /><Input name="equipment_role" label="Equipment role" defaultValue="press" /><Select name="related_source_id" label="Research source" options={sources} /><Input name="source_relationship" label="Source relationship" defaultValue="precedent" /><Select name="parent_experiment_id" label="Parent experiment" options={experiments} defaultValue={String(parentExperiment?.id ?? "")} /></div></Fieldset>
         <div className="submit-bar"><button className="button" value="draft" type="submit" disabled={busy}>Save Draft</button><button className="button primary" value="submitted" type="submit" disabled={busy}>Submit for Review</button>{message && <span className="form-message">{message}</span>}</div>
       </form>
     </section>
@@ -201,9 +213,9 @@ function labelize(value: string) {
 function Input({ name, label, type = "text", required = false, defaultValue = "" }: { name: string; label: string; type?: string; required?: boolean; defaultValue?: string }) {
   return <label>{label}<input name={name} type={type} step={type === "number" ? "0.01" : undefined} required={required} defaultValue={defaultValue} /></label>;
 }
-function Area({ name, label }: { name: string; label: string }) {
-  return <label className="full">{label}<textarea name={name} rows={3} /></label>;
+function Area({ name, label, defaultValue = "" }: { name: string; label: string; defaultValue?: string }) {
+  return <label className="full">{label}<textarea name={name} rows={3} defaultValue={defaultValue} /></label>;
 }
-function Select({ name, label, options }: { name: string; label: string; options: Option[] }) {
-  return <label>{label}<select name={name}><option value="">Select</option>{options.map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}</select></label>;
+function Select({ name, label, options, defaultValue = "" }: { name: string; label: string; options: Option[]; defaultValue?: string }) {
+  return <label>{label}<select name={name} defaultValue={defaultValue}><option value="">Select</option>{options.map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}</select></label>;
 }

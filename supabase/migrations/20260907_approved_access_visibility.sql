@@ -235,7 +235,7 @@ returns boolean language sql stable security definer set search_path = public as
     where e.id = target_id
       and (
         (e.status = 'published' and (e.visibility = 'public' or public.is_approved_user()))
-        or (public.is_approved_user() and e.researcher_id = auth.uid() and e.status in ('draft', 'submitted'))
+        or (public.is_approved_user() and e.researcher_id = auth.uid())
       )
   );
 $$;
@@ -248,7 +248,7 @@ returns boolean language sql stable security definer set search_path = public as
       and (
         (rs.status = 'published' and rs.visibility = 'public')
         or (public.is_approved_user() and rs.status = 'published')
-        or (public.is_approved_user() and rs.added_by = auth.uid() and rs.status in ('draft', 'submitted'))
+        or (public.is_approved_user() and rs.added_by = auth.uid())
       )
   );
 $$;
@@ -261,7 +261,7 @@ returns boolean language sql stable security definer set search_path = public as
       and (
         (m.status = 'published' and m.visibility = 'public')
         or (public.is_approved_user() and m.status = 'published')
-        or (public.is_approved_user() and m.created_by = auth.uid() and m.status in ('draft', 'submitted'))
+        or (public.is_approved_user() and m.created_by = auth.uid())
       )
   );
 $$;
@@ -271,11 +271,10 @@ returns boolean language sql stable security definer set search_path = public as
   select public.is_admin() or exists (
     select 1 from public.products p
     where p.id = target_id
-      and p.is_active = true
       and (
-        (p.status = 'published' and p.visibility = 'public')
-        or (public.is_approved_user() and p.status = 'published')
-        or (public.is_approved_user() and p.created_by = auth.uid() and p.status in ('draft', 'submitted'))
+        (p.is_active = true and p.status = 'published' and p.visibility = 'public')
+        or (p.is_active = true and public.is_approved_user() and p.status = 'published')
+        or (public.is_approved_user() and p.created_by = auth.uid())
       )
   );
 $$;
@@ -285,11 +284,10 @@ returns boolean language sql stable security definer set search_path = public as
   select public.is_admin() or exists (
     select 1 from public.equipment e
     where e.id = target_id
-      and e.is_active = true
       and (
-        (e.status = 'published' and e.visibility = 'public')
-        or (public.is_approved_user() and e.status = 'published')
-        or (public.is_approved_user() and e.created_by = auth.uid() and e.status in ('draft', 'submitted'))
+        (e.is_active = true and e.status = 'published' and e.visibility = 'public')
+        or (e.is_active = true and public.is_approved_user() and e.status = 'published')
+        or (public.is_approved_user() and e.created_by = auth.uid())
       )
   );
 $$;
@@ -302,7 +300,7 @@ returns boolean language sql stable security definer set search_path = public as
       and (
         (ae.status = 'published' and ae.visibility = 'public')
         or (public.is_approved_user() and ae.status = 'published')
-        or (public.is_approved_user() and ae.created_by = auth.uid() and ae.status in ('draft', 'submitted'))
+        or (public.is_approved_user() and ae.created_by = auth.uid())
       )
   );
 $$;
@@ -465,10 +463,38 @@ create policy "library media contributors create" on public.library_media for in
   or (entity_type = 'atlas_entry' and exists (select 1 from public.atlas_entries ae where ae.id = entity_id and ae.created_by = auth.uid() and ae.status in ('draft', 'submitted') and public.is_approved_user()))
 ));
 
+create or replace function public.can_manage_library_media_parent(target_entity_type text, target_entity_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select public.is_approved_user() and (
+    (target_entity_type = 'research_source' and exists (select 1 from public.research_sources rs where rs.id = target_entity_id and rs.added_by = auth.uid() and rs.status in ('draft', 'submitted')))
+    or (target_entity_type = 'material' and exists (select 1 from public.materials m where m.id = target_entity_id and m.created_by = auth.uid() and m.status in ('draft', 'submitted')))
+    or (target_entity_type = 'product' and exists (select 1 from public.products p where p.id = target_entity_id and p.created_by = auth.uid() and p.status in ('draft', 'submitted')))
+    or (target_entity_type = 'equipment' and exists (select 1 from public.equipment e where e.id = target_entity_id and e.created_by = auth.uid() and e.status in ('draft', 'submitted')))
+    or (target_entity_type = 'atlas_entry' and exists (select 1 from public.atlas_entries ae where ae.id = target_entity_id and ae.created_by = auth.uid() and ae.status in ('draft', 'submitted')))
+  );
+$$;
+
 drop policy if exists "library media contributors update own" on public.library_media;
-create policy "library media contributors update own" on public.library_media for update to authenticated using (public.is_admin() or (created_by = auth.uid() and public.is_approved_user())) with check (public.is_admin() or (created_by = auth.uid() and public.is_approved_user()));
+create policy "library media contributors update own" on public.library_media for update to authenticated
+using (
+  public.is_admin()
+  or (created_by = auth.uid() and public.can_manage_library_media_parent(entity_type, entity_id))
+)
+with check (
+  public.is_admin()
+  or (created_by = auth.uid() and public.can_manage_library_media_parent(entity_type, entity_id))
+);
 drop policy if exists "library media contributors delete own" on public.library_media;
-create policy "library media contributors delete own" on public.library_media for delete to authenticated using (public.is_admin() or (created_by = auth.uid() and public.is_approved_user()));
+create policy "library media contributors delete own" on public.library_media for delete to authenticated
+using (
+  public.is_admin()
+  or (created_by = auth.uid() and public.can_manage_library_media_parent(entity_type, entity_id))
+);
 
 drop policy if exists "stages visible with experiment" on public.experiment_stages;
 create policy "stages visible with experiment" on public.experiment_stages for select to anon, authenticated using (public.can_select_experiment(experiment_id));
@@ -497,13 +523,21 @@ drop policy if exists "experiment source links visible" on public.experiment_sou
 create policy "experiment source links visible" on public.experiment_sources for select to anon, authenticated using (public.can_select_experiment(experiment_id) and public.can_select_research_source(source_id));
 
 drop policy if exists "experiment material links manage" on public.experiment_materials;
-create policy "experiment material links manage" on public.experiment_materials for all to authenticated using (public.is_admin() or exists (select 1 from public.experiments e where e.id = experiment_id and e.researcher_id = auth.uid() and public.is_approved_user() and e.status in ('draft', 'submitted'))) with check (public.is_admin() or exists (select 1 from public.experiments e where e.id = experiment_id and e.researcher_id = auth.uid() and public.is_approved_user() and e.status in ('draft', 'submitted')));
+create policy "experiment material links manage" on public.experiment_materials for all to authenticated
+using (public.is_admin() or exists (select 1 from public.experiments e where e.id = experiment_id and e.researcher_id = auth.uid() and public.is_approved_user() and e.status in ('draft', 'submitted')))
+with check (public.is_admin() or (public.can_select_material(material_id) and exists (select 1 from public.experiments e where e.id = experiment_id and e.researcher_id = auth.uid() and public.is_approved_user() and e.status in ('draft', 'submitted'))));
 drop policy if exists "experiment product links manage" on public.experiment_products;
-create policy "experiment product links manage" on public.experiment_products for all to authenticated using (public.is_admin() or exists (select 1 from public.experiments e where e.id = experiment_id and e.researcher_id = auth.uid() and public.is_approved_user() and e.status in ('draft', 'submitted'))) with check (public.is_admin() or exists (select 1 from public.experiments e where e.id = experiment_id and e.researcher_id = auth.uid() and public.is_approved_user() and e.status in ('draft', 'submitted')));
+create policy "experiment product links manage" on public.experiment_products for all to authenticated
+using (public.is_admin() or exists (select 1 from public.experiments e where e.id = experiment_id and e.researcher_id = auth.uid() and public.is_approved_user() and e.status in ('draft', 'submitted')))
+with check (public.is_admin() or (public.can_select_product(product_id) and exists (select 1 from public.experiments e where e.id = experiment_id and e.researcher_id = auth.uid() and public.is_approved_user() and e.status in ('draft', 'submitted'))));
 drop policy if exists "experiment equipment links manage" on public.experiment_equipment;
-create policy "experiment equipment links manage" on public.experiment_equipment for all to authenticated using (public.is_admin() or exists (select 1 from public.experiments e where e.id = experiment_id and e.researcher_id = auth.uid() and public.is_approved_user() and e.status in ('draft', 'submitted'))) with check (public.is_admin() or exists (select 1 from public.experiments e where e.id = experiment_id and e.researcher_id = auth.uid() and public.is_approved_user() and e.status in ('draft', 'submitted')));
+create policy "experiment equipment links manage" on public.experiment_equipment for all to authenticated
+using (public.is_admin() or exists (select 1 from public.experiments e where e.id = experiment_id and e.researcher_id = auth.uid() and public.is_approved_user() and e.status in ('draft', 'submitted')))
+with check (public.is_admin() or (public.can_select_equipment(equipment_id) and exists (select 1 from public.experiments e where e.id = experiment_id and e.researcher_id = auth.uid() and public.is_approved_user() and e.status in ('draft', 'submitted'))));
 drop policy if exists "experiment source links manage" on public.experiment_sources;
-create policy "experiment source links manage" on public.experiment_sources for all to authenticated using (public.is_admin() or exists (select 1 from public.experiments e where e.id = experiment_id and e.researcher_id = auth.uid() and public.is_approved_user() and e.status in ('draft', 'submitted'))) with check (public.is_admin() or exists (select 1 from public.experiments e where e.id = experiment_id and e.researcher_id = auth.uid() and public.is_approved_user() and e.status in ('draft', 'submitted')));
+create policy "experiment source links manage" on public.experiment_sources for all to authenticated
+using (public.is_admin() or exists (select 1 from public.experiments e where e.id = experiment_id and e.researcher_id = auth.uid() and public.is_approved_user() and e.status in ('draft', 'submitted')))
+with check (public.is_admin() or (public.can_select_research_source(source_id) and exists (select 1 from public.experiments e where e.id = experiment_id and e.researcher_id = auth.uid() and public.is_approved_user() and e.status in ('draft', 'submitted'))));
 
 drop policy if exists "atlas source links visible" on public.atlas_entry_sources;
 create policy "atlas source links visible" on public.atlas_entry_sources for select to anon, authenticated using (public.can_select_atlas_entry(atlas_entry_id) and public.can_select_research_source(source_id));
@@ -515,19 +549,19 @@ drop policy if exists "atlas equipment links visible" on public.atlas_entry_equi
 create policy "atlas equipment links visible" on public.atlas_entry_equipment for select to anon, authenticated using (public.can_select_atlas_entry(atlas_entry_id) and public.can_select_equipment(equipment_id));
 
 drop policy if exists "atlas source links contributors create" on public.atlas_entry_sources;
-create policy "atlas source links contributors create" on public.atlas_entry_sources for insert to authenticated with check (exists (select 1 from public.atlas_entries ae where ae.id = atlas_entry_id and ae.created_by = auth.uid() and public.is_approved_user() and ae.status in ('draft', 'submitted')));
+create policy "atlas source links contributors create" on public.atlas_entry_sources for insert to authenticated with check (public.can_select_research_source(source_id) and exists (select 1 from public.atlas_entries ae where ae.id = atlas_entry_id and ae.created_by = auth.uid() and public.is_approved_user() and ae.status in ('draft', 'submitted')));
 drop policy if exists "atlas source links contributors delete" on public.atlas_entry_sources;
 create policy "atlas source links contributors delete" on public.atlas_entry_sources for delete to authenticated using (exists (select 1 from public.atlas_entries ae where ae.id = atlas_entry_id and ae.created_by = auth.uid() and public.is_approved_user() and ae.status in ('draft', 'submitted')));
 drop policy if exists "atlas material links contributors create" on public.atlas_entry_materials;
-create policy "atlas material links contributors create" on public.atlas_entry_materials for insert to authenticated with check (exists (select 1 from public.atlas_entries ae where ae.id = atlas_entry_id and ae.created_by = auth.uid() and public.is_approved_user() and ae.status in ('draft', 'submitted')));
+create policy "atlas material links contributors create" on public.atlas_entry_materials for insert to authenticated with check (public.can_select_material(material_id) and exists (select 1 from public.atlas_entries ae where ae.id = atlas_entry_id and ae.created_by = auth.uid() and public.is_approved_user() and ae.status in ('draft', 'submitted')));
 drop policy if exists "atlas material links contributors delete" on public.atlas_entry_materials;
 create policy "atlas material links contributors delete" on public.atlas_entry_materials for delete to authenticated using (exists (select 1 from public.atlas_entries ae where ae.id = atlas_entry_id and ae.created_by = auth.uid() and public.is_approved_user() and ae.status in ('draft', 'submitted')));
 drop policy if exists "atlas experiment links contributors create" on public.atlas_entry_experiments;
-create policy "atlas experiment links contributors create" on public.atlas_entry_experiments for insert to authenticated with check (exists (select 1 from public.atlas_entries ae where ae.id = atlas_entry_id and ae.created_by = auth.uid() and public.is_approved_user() and ae.status in ('draft', 'submitted')));
+create policy "atlas experiment links contributors create" on public.atlas_entry_experiments for insert to authenticated with check (public.can_select_experiment(experiment_id) and exists (select 1 from public.atlas_entries ae where ae.id = atlas_entry_id and ae.created_by = auth.uid() and public.is_approved_user() and ae.status in ('draft', 'submitted')));
 drop policy if exists "atlas experiment links contributors delete" on public.atlas_entry_experiments;
 create policy "atlas experiment links contributors delete" on public.atlas_entry_experiments for delete to authenticated using (exists (select 1 from public.atlas_entries ae where ae.id = atlas_entry_id and ae.created_by = auth.uid() and public.is_approved_user() and ae.status in ('draft', 'submitted')));
 drop policy if exists "atlas equipment links contributors create" on public.atlas_entry_equipment;
-create policy "atlas equipment links contributors create" on public.atlas_entry_equipment for insert to authenticated with check (exists (select 1 from public.atlas_entries ae where ae.id = atlas_entry_id and ae.created_by = auth.uid() and public.is_approved_user() and ae.status in ('draft', 'submitted')));
+create policy "atlas equipment links contributors create" on public.atlas_entry_equipment for insert to authenticated with check (public.can_select_equipment(equipment_id) and exists (select 1 from public.atlas_entries ae where ae.id = atlas_entry_id and ae.created_by = auth.uid() and public.is_approved_user() and ae.status in ('draft', 'submitted')));
 drop policy if exists "atlas equipment links contributors delete" on public.atlas_entry_equipment;
 create policy "atlas equipment links contributors delete" on public.atlas_entry_equipment for delete to authenticated using (exists (select 1 from public.atlas_entries ae where ae.id = atlas_entry_id and ae.created_by = auth.uid() and public.is_approved_user() and ae.status in ('draft', 'submitted')));
 

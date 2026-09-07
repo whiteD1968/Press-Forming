@@ -1,8 +1,10 @@
 import { atlasGroups } from "../../lib/research";
 import { DynamicAtlasPage } from "../../components/LibraryPages";
-import { requireApprovedUser } from "../../lib/access";
+import { getResearchAccessState, isApprovedState } from "../../lib/access";
+
+export const dynamic = "force-dynamic";
 
 export default async function AtlasPage() {
-  await requireApprovedUser();
-  return <DynamicAtlasPage fallback={atlasGroups} />;
+  const { state } = await getResearchAccessState();
+  return <DynamicAtlasPage fallback={atlasGroups} accessState={state} allowFallback={isApprovedState(state)} />;
 }

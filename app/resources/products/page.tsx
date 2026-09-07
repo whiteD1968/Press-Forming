@@ -1,5 +1,9 @@
 import { ProductsPage } from "../../../components/LibraryPages";
+import { getResearchAccessState } from "../../../lib/access";
 
-export default function ProductsIndex() {
-  return <ProductsPage />;
+export const dynamic = "force-dynamic";
+
+export default async function ProductsIndex() {
+  const { state } = await getResearchAccessState();
+  return <ProductsPage accessState={state} />;
 }

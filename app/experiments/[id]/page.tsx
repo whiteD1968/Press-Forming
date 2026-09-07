@@ -10,6 +10,8 @@ export default async function ExperimentDetail({ params }: { params: Promise<{ i
   const { id } = await params;
   const supabase = await createClient();
   const { data: auth } = await supabase.auth.getUser();
+  const access = await getResearchAccessState();
+  const approved = isApprovedState(access.state);
 
   const { data: experiment } = await supabase
     .from("experiments")
@@ -18,8 +20,7 @@ export default async function ExperimentDetail({ params }: { params: Promise<{ i
     .single();
 
   if (!experiment) {
-    const access = await getResearchAccessState();
-    if (!isApprovedState(access.state)) return <AccessRequired />;
+    if (!approved) return <AccessRequired />;
     notFound();
   }
 
@@ -64,7 +65,8 @@ export default async function ExperimentDetail({ params }: { params: Promise<{ i
         </div>
         <div className="detail-actions">
           <StatusPill status={experiment.status} />
-          {experiment.visibility && <span className="status-pill">{String(experiment.visibility).toUpperCase()}</span>}
+          {approved && experiment.visibility && <span className="status-pill">{String(experiment.visibility).toUpperCase()}</span>}
+          {approved && <Link className="button" href={`/submit?parent=${experiment.id}`}>CREATE NEXT TEST</Link>}
           {canEdit && <Link className="button" href={`/experiments/${experiment.id}/edit`}>{isAdmin ? "Admin Edit" : "Edit Experiment"}</Link>}
         </div>
       </div>

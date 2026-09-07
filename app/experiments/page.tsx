@@ -1,12 +1,13 @@
 import Link from "next/link";
 import { createClient } from "../../lib/supabase/server";
 import { StatusPill } from "../../components/StatusPill";
-import { requireApprovedUser } from "../../lib/access";
+import { getResearchAccessState, isApprovedState } from "../../lib/access";
 
 export const dynamic = "force-dynamic";
 
 export default async function ExperimentsPage() {
-  await requireApprovedUser();
+  const access = await getResearchAccessState();
+  const approved = isApprovedState(access.state);
   let experiments: any[] = [];
   let errorMessage = "";
 
@@ -14,7 +15,7 @@ export default async function ExperimentsPage() {
     const supabase = await createClient();
     const { data, error } = await supabase
       .from("experiments")
-      .select("id, code, title, summary, status, material_name, thickness_mm, outcome, created_at")
+      .select("id, code, title, summary, status, visibility, material_name, thickness_mm, outcome, created_at")
       .order("created_at", { ascending: false });
     if (error) throw error;
     experiments = data ?? [];
@@ -28,18 +29,28 @@ export default async function ExperimentsPage() {
         <div>
           <p className="eyebrow">Experimental Archive</p>
           <h1>Experiments</h1>
-          <p>Successful, partial, failed, and unexpected outcomes all remain part of the research record.</p>
+          <p>{approved ? "Successful, partial, failed, and unexpected outcomes all remain part of the research record." : "Selected public research from Forming Material."}</p>
         </div>
-        <Link className="button primary" href="/submit">+ New experiment</Link>
+        {approved ? <Link className="button primary" href="/submit">+ New experiment</Link> : <Link className="button primary" href="/login">Sign In</Link>}
       </div>
 
-      {errorMessage && <div className="notice">Connect Supabase and run the schema to activate the archive. {errorMessage}</div>}
+      {errorMessage && <div className="notice">{approved ? errorMessage : "Selected research from Forming Material will appear here when released publicly."}</div>}
 
       {!errorMessage && experiments.length === 0 && (
         <div className="empty-state">
-          <strong>No experiments yet.</strong>
-          <p>Create FM-001 to test the complete research workflow.</p>
+          <strong>{approved ? "No experiments yet." : "Selected research from Forming Material will appear here when released publicly."}</strong>
+          <p>{approved ? "Create FM-001 to test the complete research workflow." : "Sign in or request access to view the working research archive."}</p>
+          {!approved && <div className="hero-actions"><Link className="button primary" href="/login">Sign In</Link><Link className="button" href="/login">Request Research Access</Link></div>}
         </div>
+      )}
+
+      {approved && experiments.length > 0 && (
+        <form className="form-panel" action="/experiments/compare">
+          <div className="section-heading-row"><p className="section-index">Compare Experiments</p><button className="button" type="submit">Compare Selected</button></div>
+          <div className="filter-bar">
+            {experiments.map((experiment) => <label key={experiment.id}><input name="id" type="checkbox" value={experiment.id} /> {experiment.code || experiment.title}</label>)}
+          </div>
+        </form>
       )}
 
       <div className="experiment-list">
@@ -51,10 +62,11 @@ export default async function ExperimentsPage() {
               <p>{experiment.summary || "No summary recorded."}</p>
             </div>
             <div className="experiment-meta">
-              <span>{experiment.material_name || "—"}</span>
-              <span>{experiment.thickness_mm ? `${experiment.thickness_mm} mm` : "—"}</span>
+              <span>{experiment.material_name || "-"}</span>
+              <span>{experiment.thickness_mm ? `${experiment.thickness_mm} mm` : "-"}</span>
               {experiment.outcome && <span>{experiment.outcome}</span>}
               <StatusPill status={experiment.status} />
+              {approved && experiment.visibility && <span className="status-pill">{String(experiment.visibility).toUpperCase()}</span>}
             </div>
           </Link>
         ))}
