@@ -412,21 +412,23 @@ create or replace view public.published_product_vendor_links as
 select
   p.id as product_id,
   p.product_name,
-  p.manufacturer,
   p.product_url,
+  p.vendor_id,
+  v.name as vendor_name,
+  v.website_url as vendor_website_url,
+  p.manufacturer,
   p.manufacturer_url,
   p.price,
   p.currency,
-  p.price_checked_at,
-  v.id as vendor_id,
-  v.name as vendor_name,
-  v.website_url as vendor_website_url
+  p.price_checked_at
 from public.products p
 join public.vendors v on v.id = p.vendor_id
 where p.status = 'published'
   and p.visibility = 'public'
   and p.is_active = true
   and v.is_active = true;
+
+grant select on public.published_product_vendor_links to anon, authenticated;
 
 drop policy if exists "product purchases authenticated read" on public.product_purchases;
 drop policy if exists "product purchases approved read" on public.product_purchases;
