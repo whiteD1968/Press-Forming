@@ -1,7 +1,9 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import Link from "next/link";
 import { createClient } from "../../lib/supabase/client";
+import { defaultObservationTypes, ObservationCardFields } from "../../components/ToolAndObservationPages";
 
 type Stage = Record<string, string>;
 type Option = { id: string; label: string };
@@ -27,6 +29,9 @@ export default function SubmitPage() {
   const [equipment, setEquipment] = useState<Option[]>([]);
   const [sources, setSources] = useState<Option[]>([]);
   const [experiments, setExperiments] = useState<Option[]>([]);
+  const [formingTools, setFormingTools] = useState<Option[]>([]);
+  const [observationTypes, setObservationTypes] = useState(defaultObservationTypes);
+  const [observationCount, setObservationCount] = useState(1);
   const [parentExperiment, setParentExperiment] = useState<ParentExperiment | null>(null);
 
   useEffect(() => {
@@ -60,14 +65,19 @@ export default function SubmitPage() {
       supabase.from("materials").select("id, name").order("name"),
       supabase.from("products").select("id, product_name").order("product_name"),
       supabase.from("equipment").select("id, name").order("name"),
+      supabase.from("forming_tools").select("id, tool_code, name").order("name"),
       supabase.from("research_sources").select("id, title").order("title"),
       supabase.from("experiments").select("id, code, title").order("created_at", { ascending: false }).limit(80),
-    ]).then(([materialRows, productRows, equipmentRows, sourceRows, experimentRows]) => {
+      supabase.from("taxonomy_terms").select("name").eq("taxonomy_type", "observation_type").eq("is_active", true).order("sort_order"),
+    ]).then(([materialRows, productRows, equipmentRows, toolRows, sourceRows, experimentRows, taxonomyRows]) => {
       setMaterials(((materialRows.data ?? []) as { id: string; name: string }[]).map((item) => ({ id: item.id, label: item.name })));
       setProducts(((productRows.data ?? []) as { id: string; product_name: string }[]).map((item) => ({ id: item.id, label: item.product_name })));
       setEquipment(((equipmentRows.data ?? []) as { id: string; name: string }[]).map((item) => ({ id: item.id, label: item.name })));
+      setFormingTools(((toolRows.data ?? []) as { id: string; tool_code: string | null; name: string }[]).map((item) => ({ id: item.id, label: `${item.tool_code || "Tool"} / ${item.name}` })));
       setSources(((sourceRows.data ?? []) as { id: string; title: string }[]).map((item) => ({ id: item.id, label: item.title })));
       setExperiments(((experimentRows.data ?? []) as { id: string; code: string | null; title: string }[]).map((item) => ({ id: item.id, label: `${item.code || "Experiment"} / ${item.title}` })));
+      const terms = ((taxonomyRows.data ?? []) as { name: string }[]).map((item) => item.name);
+      if (terms.length) setObservationTypes(terms);
     });
   }, []);
 
@@ -139,9 +149,19 @@ export default function SubmitPage() {
         row.title = stage.title || `Stage ${index + 1}`;
         return row;
       });
+      let savedStages: { id: string; stage_number: number }[] = [];
       if (stageRows.length) {
-        const { error } = await supabase.from("experiment_stages").insert(stageRows);
+        const { data, error } = await supabase.from("experiment_stages").insert(stageRows).select("id, stage_number");
         if (error) throw new Error(`Experiment saved, but stages could not be saved: ${error.message}`);
+        savedStages = (data ?? []) as { id: string; stage_number: number }[];
+      }
+
+      for (let index = 0; index < savedStages.length; index++) {
+        const toolId = text(`stage_tool_id_${index}`);
+        if (toolId) {
+          const { error } = await supabase.from("experiment_stage_tools").insert({ stage_id: savedStages[index].id, forming_tool_id: toolId, role: text(`stage_tool_role_${index}`) || "forming tool" });
+          if (error) throw new Error(`Experiment saved, but stage tool link could not be saved: ${error.message}`);
+        }
       }
 
       const materialId = text("related_material_id");
@@ -177,6 +197,42 @@ export default function SubmitPage() {
         if (mediaError) throw new Error(`Image ${index + 1} uploaded, but media metadata could not be saved: ${mediaError.message}`);
       }
 
+      for (let index = 0; index < observationCount; index++) {
+        const observationType = text(`observation_type_${index}`);
+        const observationFiles = form.getAll(`observation_media_${index}`).filter((entry): entry is File => entry instanceof File && entry.size > 0);
+        if (!observationType && observationFiles.length === 0) continue;
+        if (!observationType) throw new Error(`Observation ${index + 1} needs a type before photos can be attached.`);
+        const stageIndexText = text(`observation_stage_index_${index}`);
+        const stageId = stageIndexText ? savedStages[Number(stageIndexText)]?.id ?? null : null;
+        const { data: observation, error: observationError } = await supabase.from("experiment_observations").insert({
+          experiment_id: experiment.id,
+          stage_id: stageId,
+          observation_type: observationType,
+          severity: text(`observation_severity_${index}`),
+          location: text(`observation_location_${index}`),
+          geometry_relationship: text(`observation_geometry_relationship_${index}`),
+          description: text(`observation_description_${index}`),
+          measurement_value: num(`observation_measurement_value_${index}`),
+          measurement_unit: text(`observation_measurement_unit_${index}`),
+          cause_notes: text(`observation_cause_notes_${index}`),
+          created_by: auth.user.id,
+        }).select("id").single();
+        if (observationError || !observation) throw new Error(`Observation ${index + 1} could not be saved: ${observationError?.message ?? "unknown error"}`);
+        for (let photoIndex = 0; photoIndex < observationFiles.length; photoIndex++) {
+          setMessage(`Uploading observation ${index + 1} photo ${photoIndex + 1} of ${observationFiles.length}...`);
+          const file = observationFiles[photoIndex];
+          const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "-");
+          const storagePath = `${experiment.id}/observations/${observation.id}/${Date.now()}-${photoIndex}-${safeName}`;
+          const { error: uploadError } = await supabase.storage.from("experiment-media").upload(storagePath, file, { upsert: false });
+          if (uploadError) throw new Error(`Observation photo could not be uploaded: ${uploadError.message}`);
+          const caption = text(`observation_caption_${index}`) || file.name;
+          const { data: mediaRow, error: mediaError } = await supabase.from("experiment_media").insert({ experiment_id: experiment.id, storage_path: storagePath, media_type: "observation", caption, display_order: photoIndex, created_by: auth.user.id }).select("id").single();
+          if (mediaError || !mediaRow) throw new Error(`Observation photo metadata could not be saved: ${mediaError?.message ?? "unknown error"}`);
+          const { error: linkError } = await supabase.from("experiment_observation_media").insert({ observation_id: observation.id, media_id: mediaRow.id, caption });
+          if (linkError) throw new Error(`Observation photo link could not be saved: ${linkError.message}`);
+        }
+      }
+
       window.location.href = `/experiments/${experiment.id}`;
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to save experiment.");
@@ -194,8 +250,8 @@ export default function SubmitPage() {
         <Fieldset index="01" title="Research question"><div className="form-grid"><Input name="title" label="Title" required /><Input name="researcher_name" label="Researcher" required /><Area name="research_question" label="Research question" /><Area name="research_objective" label="Research objective" /><Area name="hypothesis" label="Hypothesis" /><Area name="summary" label="Short summary" /></div></Fieldset>
         <Fieldset index="02" title="Sheet / specimen"><div className="form-grid form-grid-3"><Input name="material_name" label="Material" defaultValue={String(parentExperiment?.material_name ?? "")} /><Input name="material_condition" label="Material condition" defaultValue={String(parentExperiment?.material_condition ?? "")} /><Input name="thickness_mm" label="Thickness" type="number" defaultValue={String(parentExperiment?.thickness_mm ?? "")} /><Input name="sheet_width_mm" label="Width" type="number" /><Input name="sheet_length_mm" label="Length" type="number" /><Area name="initial_geometry" label="Initial geometry" /></div></Fieldset>
         <Fieldset index="03" title="Forming strategy"><div className="form-grid form-grid-3"><Input name="forming_method" label="Forming method" defaultValue={String(parentExperiment?.forming_method ?? "")} /><Input name="geometry_type" label="Geometry type" defaultValue={String(parentExperiment?.geometry_type ?? "")} /><Input name="undercut_type" label="Undercut type" defaultValue={String(parentExperiment?.undercut_type ?? "")} /></div></Fieldset>
-        <Fieldset index="04" title="Press sequence"><div className="stage-editor">{stages.map((stage, index) => <details className="stage-editor-card" open={index === 0} key={index}><summary className="stage-editor-head"><strong>Stage {String(index + 1).padStart(2, "0")}</strong>{stages.length > 1 && <button type="button" onClick={() => setStages((current) => current.filter((_, i) => i !== index))}>Remove</button>}</summary><div className="form-grid form-grid-3">{stageFields.map((field) => field === "observations" || field === "stage_result" || field === "stage_image_notes" ? <label className="full" key={field}>{labelize(field)}<textarea rows={2} value={stage[field]} onChange={(event) => updateStage(index, field, event.target.value)} /></label> : <label key={field}>{labelize(field)}<input type={numericStageFields.has(field) ? "number" : "text"} step="0.01" value={stage[field]} onChange={(event) => updateStage(index, field, event.target.value)} /></label>)}</div></details>)}<button className="button" type="button" onClick={() => setStages((current) => [...current, emptyStage()])}>+ Add press stage</button></div></Fieldset>
-        <Fieldset index="05" title="Measured result"><div className="form-grid form-grid-3"><Area name="final_geometry" label="Final geometry" /><Input name="undercut_depth_mm" label="Undercut depth" type="number" /><Input name="undercut_width_mm" label="Undercut width" type="number" /><Input name="undercut_height_mm" label="Undercut height" type="number" /><Input name="lateral_displacement_mm" label="Lateral displacement" type="number" /><Input name="springback_deg" label="Springback" type="number" /><Input name="measured_thickness_min_mm" label="Minimum measured thickness" type="number" /><Input name="max_thinning_percent" label="Maximum thinning %" type="number" /><Input name="wrinkling_severity" label="Wrinkling" /><Input name="surface_condition" label="Surface condition" /><Input name="tool_damage" label="Tool damage" /><Input name="measurement_method" label="Measurement method" /><Input name="ambient_temperature_c" label="Ambient temperature" type="number" /></div></Fieldset>
+        <Fieldset index="04" title="Press sequence"><div className="stage-editor">{stages.map((stage, index) => <details className="stage-editor-card" open={index === 0} key={index}><summary className="stage-editor-head"><strong>Stage {String(index + 1).padStart(2, "0")}</strong>{stages.length > 1 && <button type="button" onClick={() => setStages((current) => current.filter((_, i) => i !== index))}>Remove</button>}</summary><div className="form-panel"><p className="section-index">Linked detailed tool</p><div className="form-grid form-grid-3"><Select name={`stage_tool_id_${index}`} label="Link existing tool" options={formingTools} /><Input name={`stage_tool_role_${index}`} label="Tool role" defaultValue="upper tool" /><Link className="button" href="/contribute/tools/new" target="_blank" rel="noopener noreferrer">+ CREATE TOOL</Link></div></div><div className="form-grid form-grid-3">{stageFields.map((field) => field === "observations" || field === "stage_result" || field === "stage_image_notes" ? <label className="full" key={field}>{labelize(field)}<textarea rows={2} value={stage[field]} onChange={(event) => updateStage(index, field, event.target.value)} /></label> : <label key={field}>{labelize(field)}<input type={numericStageFields.has(field) ? "number" : "text"} step="0.01" value={stage[field]} onChange={(event) => updateStage(index, field, event.target.value)} /></label>)}</div></details>)}<button className="button" type="button" onClick={() => setStages((current) => [...current, emptyStage()])}>+ Add press stage</button></div></Fieldset>
+        <Fieldset index="05" title="Measured result"><div className="form-grid form-grid-3"><Area name="final_geometry" label="Final geometry" /><Input name="undercut_depth_mm" label="Undercut depth" type="number" /><Input name="undercut_width_mm" label="Undercut width" type="number" /><Input name="undercut_height_mm" label="Undercut height" type="number" /><Input name="lateral_displacement_mm" label="Lateral displacement" type="number" /><Input name="springback_deg" label="Springback" type="number" /><Input name="measured_thickness_min_mm" label="Minimum measured thickness" type="number" /><Input name="max_thinning_percent" label="Maximum thinning %" type="number" /><Input name="wrinkling_severity" label="Wrinkling" /><Input name="surface_condition" label="Surface condition" /><Input name="tool_damage" label="Tool damage" /><Input name="measurement_method" label="Measurement method" /><Input name="ambient_temperature_c" label="Ambient temperature" type="number" /></div><div className="stage-editor"><div className="section-heading-row"><p className="section-index">Visual observations</p><button className="button" type="button" onClick={() => setObservationCount((current) => current + 1)}>+ ADD OBSERVATION</button></div>{Array.from({ length: observationCount }).map((_, index) => <ObservationCardFields key={index} index={index} stages={stages.map((stage, stageIndex) => ({ value: String(stageIndex), label: `Stage ${String(stageIndex + 1).padStart(2, "0")} / ${stage.title || "Untitled"}` }))} observationTypes={observationTypes} />)}</div></Fieldset>
         <Fieldset index="06" title="Interpretation"><div className="form-grid form-grid-3"><label>Outcome<select name="outcome" defaultValue=""><option value="">Select</option><option>successful</option><option>partial</option><option>failed</option><option>unexpected</option></select></label><Area name="observations" label="General observations" /><Area name="failure_notes" label="Failure notes" /><Area name="conclusion" label="Conclusion" /><Area name="next_test" label="Next test" /><label className="full">Images<input name="media" type="file" accept="image/*" multiple /></label></div></Fieldset>
         <Fieldset index="07" title="Research links"><div className="form-grid form-grid-3"><Select name="related_material_id" label="Related material" options={materials} /><Input name="material_role" label="Material role" defaultValue="sheet" /><Select name="related_product_id" label="Exact product" options={products} /><Input name="product_role" label="Product role" defaultValue="sheet" /><Select name="related_equipment_id" label="Equipment" options={equipment} /><Input name="equipment_role" label="Equipment role" defaultValue="press" /><Select name="related_source_id" label="Research source" options={sources} /><Input name="source_relationship" label="Source relationship" defaultValue="precedent" /><Select name="parent_experiment_id" label="Parent experiment" options={experiments} defaultValue={String(parentExperiment?.id ?? "")} /></div></Fieldset>
         <div className="submit-bar"><button className="button" value="draft" type="submit" disabled={busy}>Save Draft</button><button className="button primary" value="submitted" type="submit" disabled={busy}>Submit for Review</button>{message && <span className="form-message">{message}</span>}</div>

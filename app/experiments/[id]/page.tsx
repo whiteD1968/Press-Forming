@@ -82,6 +82,19 @@ export default async function ExperimentDetail({ params }: { params: Promise<{ i
     .eq("experiment_id", id)
     .order("display_order", { ascending: true });
 
+  const { data: stageTools } = (stages ?? []).length
+    ? await supabase
+      .from("experiment_stage_tools")
+      .select("stage_id, role, forming_tools(id, name, tool_code, tool_type, forming_tool_print_settings(print_material_text, layer_height_mm, wall_count, infill_percent, print_orientation))")
+      .in("stage_id", (stages ?? []).map((stage: any) => stage.id))
+    : { data: [] };
+
+  const { data: observations } = await supabase
+    .from("experiment_observations")
+    .select("*, experiment_stages(id, stage_number, title), experiment_observation_media(caption, experiment_media(id, storage_path, caption, media_type, display_order))")
+    .eq("experiment_id", id)
+    .order("created_at", { ascending: true });
+
   const [{ data: parentExperiment }, { data: childExperiments }, { data: relatedCandidates }] = await Promise.all([
     experiment.parent_experiment_id
       ? supabase.from("experiments").select("id, code, title").eq("id", experiment.parent_experiment_id).maybeSingle()
@@ -108,6 +121,17 @@ export default async function ExperimentDetail({ params }: { params: Promise<{ i
     const { data } = await supabase.storage.from("experiment-media").createSignedUrl(item.storage_path, 3600);
     return { ...item, signedUrl: data?.signedUrl ?? null };
   }));
+  const observationsWithMedia = await Promise.all((observations ?? []).map(async (observation: any) => {
+    const links = await Promise.all((observation.experiment_observation_media ?? []).map(async (link: any) => {
+      const mediaItem = Array.isArray(link.experiment_media) ? link.experiment_media[0] : link.experiment_media;
+      if (!mediaItem?.storage_path) return link;
+      const { data } = await supabase.storage.from("experiment-media").createSignedUrl(mediaItem.storage_path, 3600);
+      return { ...link, experiment_media: { ...mediaItem, signedUrl: data?.signedUrl ?? null } };
+    }));
+    return { ...observation, experiment_observation_media: links };
+  }));
+  const toolsByStage = new Map<string, any[]>();
+  (stageTools ?? []).forEach((link: any) => toolsByStage.set(link.stage_id, [...(toolsByStage.get(link.stage_id) ?? []), link]));
   const csv = experimentCsv(experiment as Record<string, unknown>, (stages ?? []) as Record<string, unknown>[]);
   const csvName = `${String(experiment.code || "experiment").replace(/[^a-z0-9_-]+/gi, "-").toLowerCase()}-data.csv`;
 
@@ -183,6 +207,15 @@ export default async function ExperimentDetail({ params }: { params: Promise<{ i
                   <span><b>Force</b> {stage.press_force_tons ? `${stage.press_force_tons} ton` : "—"}</span>
                   <span><b>Constraint</b> {stage.constraint_type || "—"}</span>
                 </div>
+                {(toolsByStage.get(stage.id) ?? []).length > 0 && (
+                  <div className="related-list">
+                    {(toolsByStage.get(stage.id) ?? []).map((link: any) => {
+                      const tool = Array.isArray(link.forming_tools) ? link.forming_tools[0] : link.forming_tools;
+                      const settings = Array.isArray(tool?.forming_tool_print_settings) ? tool.forming_tool_print_settings[0] : null;
+                      return tool ? <Link href={`/resources/tools/${tool.id}`} key={`${stage.id}-${tool.id}-${link.role}`}><strong>{[tool.tool_code, tool.name].filter(Boolean).join(" / ")}</strong><small>{[link.role, tool.tool_type, settings?.print_material_text, settings?.layer_height_mm ? `${settings.layer_height_mm} mm layer` : null, settings?.wall_count ? `${settings.wall_count} walls` : null, settings?.infill_percent ? `${settings.infill_percent}% infill` : null, settings?.print_orientation].filter(Boolean).join(" / ")}</small></Link> : null;
+                    })}
+                  </div>
+                )}
                 {stage.observations && <p>{stage.observations}</p>}
               </div>
             </article>
@@ -199,6 +232,38 @@ export default async function ExperimentDetail({ params }: { params: Promise<{ i
         <div>
           <p className="section-index">Failure / behavior notes</p>
           <p>{experiment.failure_notes || "No failure notes recorded."}</p>
+        </div>
+      </section>
+
+      <section className="detail-section" id="visual-observations">
+        <p className="section-index">Visual Observations</p>
+        <div className="stage-stack">
+          {observationsWithMedia.map((observation: any) => {
+            const stage = Array.isArray(observation.experiment_stages) ? observation.experiment_stages[0] : observation.experiment_stages;
+            return (
+              <article className="stage-card" id={`observation-${observation.id}`} key={observation.id}>
+                <div className="stage-number">{stage?.stage_number ? String(stage.stage_number).padStart(2, "0") : "EX"}</div>
+                <div>
+                  <h2>{observation.observation_type}{observation.severity ? ` / ${observation.severity}` : ""}</h2>
+                  <div className="stage-facts">
+                    <span><b>Stage</b> {stage ? stage.title || `Stage ${stage.stage_number}` : "Whole experiment"}</span>
+                    <span><b>Location</b> {observation.location || "-"}</span>
+                    <span><b>Measurement</b> {[observation.measurement_value, observation.measurement_unit].filter(Boolean).join(" ") || "-"}</span>
+                  </div>
+                  {observation.geometry_relationship && <p><strong>Geometry relationship</strong><br />{observation.geometry_relationship}</p>}
+                  {observation.description && <p>{observation.description}</p>}
+                  {observation.cause_notes && <p><strong>Possible cause / interpretation</strong><br />{observation.cause_notes}</p>}
+                  <div className="media-grid">
+                    {(observation.experiment_observation_media ?? []).map((link: any) => {
+                      const mediaItem = Array.isArray(link.experiment_media) ? link.experiment_media[0] : link.experiment_media;
+                      return mediaItem?.signedUrl ? <figure key={mediaItem.id}>{/* eslint-disable-next-line @next/next/no-img-element */}<img src={mediaItem.signedUrl} alt={link.caption || mediaItem.caption || observation.observation_type} /><figcaption><span>{observation.observation_type}</span>{link.caption || mediaItem.caption}</figcaption></figure> : null;
+                    })}
+                  </div>
+                </div>
+              </article>
+            );
+          })}
+          {observationsWithMedia.length === 0 && <p>No structured visual observations recorded.</p>}
         </div>
       </section>
     </section>

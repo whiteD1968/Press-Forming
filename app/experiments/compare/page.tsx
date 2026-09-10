@@ -98,6 +98,27 @@ export default async function ExperimentComparePage({ searchParams }: { searchPa
     .in("experiment_id", visible.map((experiment: any) => experiment.id))
     .order("stage_number", { ascending: true });
 
+  const { data: stageTools } = (stages ?? []).length
+    ? await supabase
+      .from("experiment_stage_tools")
+      .select("stage_id, role, forming_tools(id, name, tool_code, forming_tool_print_settings(print_material_text, layer_height_mm, wall_count, infill_percent, print_orientation, equipment(name)))")
+      .in("stage_id", (stages ?? []).map((stage: any) => stage.id))
+    : { data: [] };
+
+  const { data: observations } = await supabase
+    .from("experiment_observations")
+    .select("experiment_id, observation_type")
+    .in("experiment_id", visible.map((experiment: any) => experiment.id));
+
+  const toolsByStage = new Map<string, any[]>();
+  (stageTools ?? []).forEach((link: any) => toolsByStage.set(link.stage_id, [...(toolsByStage.get(link.stage_id) ?? []), link]));
+  const behaviorSummary = new Map<string, Map<string, number>>();
+  (observations ?? []).forEach((observation: any) => {
+    const current = behaviorSummary.get(observation.experiment_id) ?? new Map<string, number>();
+    current.set(observation.observation_type, (current.get(observation.observation_type) ?? 0) + 1);
+    behaviorSummary.set(observation.experiment_id, current);
+  });
+
   return (
     <section className="page-shell">
       <div className="page-heading split-heading">
@@ -139,6 +160,40 @@ export default async function ExperimentComparePage({ searchParams }: { searchPa
               ))}
             </article>
           ))}
+        </div>
+      </section>
+
+      <section className="detail-section">
+        <p className="section-index">Tools</p>
+        <div className="comparison-grid">
+          {visible.map((experiment: any) => (
+            <article className="stage-card" key={`tools-${experiment.id}`}>
+              <h2>{experiment.code || "Experiment"}</h2>
+              {(stages ?? []).filter((stage: any) => stage.experiment_id === experiment.id).map((stage: any) => (
+                <div className="facts-grid" key={`tool-stage-${stage.id}`}>
+                  <div><span>Stage</span><strong>{stage.stage_number} / {stage.title}</strong></div>
+                  {(toolsByStage.get(stage.id) ?? []).map((link: any) => {
+                    const tool = Array.isArray(link.forming_tools) ? link.forming_tools[0] : link.forming_tools;
+                    const settings = Array.isArray(tool?.forming_tool_print_settings) ? tool.forming_tool_print_settings[0] : null;
+                    const printer = Array.isArray(settings?.equipment) ? settings.equipment[0] : settings?.equipment;
+                    return tool ? <div key={`${stage.id}-${tool.id}-${link.role}`}><span>{link.role || "Tool"}</span><strong>{[tool.tool_code, tool.name, settings?.print_material_text, printer?.name, settings?.layer_height_mm ? `${settings.layer_height_mm} mm layer` : null, settings?.wall_count ? `${settings.wall_count} walls` : null, settings?.infill_percent ? `${settings.infill_percent}% infill` : null, settings?.print_orientation].filter(Boolean).join(" / ")}</strong></div> : null;
+                  })}
+                </div>
+              ))}
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="detail-section">
+        <p className="section-index">Observed Behaviors</p>
+        <div className="comparison-table">
+          <div className="comparison-row comparison-head"><span>Experiment</span><strong>Observation counts</strong></div>
+          {visible.map((experiment: any) => {
+            const counts = behaviorSummary.get(experiment.id);
+            const summary = counts ? Array.from(counts.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([type, count]) => `${type} x ${count}`).join(" / ") : "No structured observations";
+            return <div className="comparison-row" key={`obs-${experiment.id}`}><span>{experiment.code || experiment.title}</span><span>{summary}</span></div>;
+          })}
         </div>
       </section>
     </section>
