@@ -61,7 +61,7 @@ create table if not exists public.forming_tool_print_settings (
 create table if not exists public.experiment_stage_tools (
   stage_id uuid not null references public.experiment_stages(id) on delete cascade,
   forming_tool_id uuid not null references public.forming_tools(id) on delete restrict,
-  role text,
+  role text not null default 'forming tool',
   created_at timestamptz default now(),
   primary key (stage_id, forming_tool_id, role)
 );
@@ -409,7 +409,17 @@ using (bucket_id = 'library-media' and (
     or ((storage.foldername(name))[1] = 'forming_tool' and exists (select 1 from public.forming_tools ft where ft.id::text = (storage.foldername(name))[2] and ft.created_by = auth.uid() and ft.status in ('draft', 'submitted')))
   ))
 ))
-with check (bucket_id = 'library-media');
+with check (bucket_id = 'library-media' and (
+  public.is_admin()
+  or (public.is_approved_user() and (
+    ((storage.foldername(name))[1] = 'research_source' and exists (select 1 from public.research_sources rs where rs.id::text = (storage.foldername(name))[2] and rs.added_by = auth.uid() and rs.status in ('draft', 'submitted')))
+    or ((storage.foldername(name))[1] = 'material' and exists (select 1 from public.materials m where m.id::text = (storage.foldername(name))[2] and m.created_by = auth.uid() and m.status in ('draft', 'submitted')))
+    or ((storage.foldername(name))[1] = 'product' and exists (select 1 from public.products p where p.id::text = (storage.foldername(name))[2] and p.created_by = auth.uid() and p.status in ('draft', 'submitted')))
+    or ((storage.foldername(name))[1] = 'equipment' and exists (select 1 from public.equipment e where e.id::text = (storage.foldername(name))[2] and e.created_by = auth.uid() and e.status in ('draft', 'submitted')))
+    or ((storage.foldername(name))[1] = 'atlas_entry' and exists (select 1 from public.atlas_entries ae where ae.id::text = (storage.foldername(name))[2] and ae.created_by = auth.uid() and ae.status in ('draft', 'submitted')))
+    or ((storage.foldername(name))[1] = 'forming_tool' and exists (select 1 from public.forming_tools ft where ft.id::text = (storage.foldername(name))[2] and ft.created_by = auth.uid() and ft.status in ('draft', 'submitted')))
+  ))
+));
 
 drop policy if exists "library media objects contributors delete" on storage.objects;
 create policy "library media objects contributors delete"

@@ -141,7 +141,10 @@ export default function SubmitPage() {
       }).select("id, code").single();
       if (experimentError || !experiment) throw experimentError;
 
-      const stageRows = stages.filter((stage) => Object.values(stage).some((value) => value.trim())).map((stage, index) => {
+      const preparedStages = stages
+        .map((stage, uiIndex) => ({ stage, uiIndex }))
+        .filter(({ stage, uiIndex }) => Object.values(stage).some((value) => value.trim()) || text(`stage_tool_id_${uiIndex}`));
+      const stageRows = preparedStages.map(({ stage }, index) => {
         const row: Record<string, string | number | null> = { experiment_id: experiment.id, stage_number: index + 1 };
         stageFields.forEach((field) => {
           row[field] = numericStageFields.has(field) ? (stage[field] ? Number(stage[field]) : null) : stage[field];
@@ -149,17 +152,23 @@ export default function SubmitPage() {
         row.title = stage.title || `Stage ${index + 1}`;
         return row;
       });
-      let savedStages: { id: string; stage_number: number }[] = [];
+      const stageIdByUiIndex = new Map<number, string>();
       if (stageRows.length) {
         const { data, error } = await supabase.from("experiment_stages").insert(stageRows).select("id, stage_number");
         if (error) throw new Error(`Experiment saved, but stages could not be saved: ${error.message}`);
-        savedStages = (data ?? []) as { id: string; stage_number: number }[];
+        const savedStageIdByNumber = new Map(((data ?? []) as { id: string; stage_number: number }[]).map((stage) => [stage.stage_number, stage.id]));
+        preparedStages.forEach(({ uiIndex }, index) => {
+          const stageId = savedStageIdByNumber.get(index + 1);
+          if (stageId) stageIdByUiIndex.set(uiIndex, stageId);
+        });
       }
 
-      for (let index = 0; index < savedStages.length; index++) {
-        const toolId = text(`stage_tool_id_${index}`);
+      for (const { uiIndex } of preparedStages) {
+        const toolId = text(`stage_tool_id_${uiIndex}`);
+        const stageId = stageIdByUiIndex.get(uiIndex);
         if (toolId) {
-          const { error } = await supabase.from("experiment_stage_tools").insert({ stage_id: savedStages[index].id, forming_tool_id: toolId, role: text(`stage_tool_role_${index}`) || "forming tool" });
+          if (!stageId) throw new Error(`Stage tool link could not resolve UI stage ${uiIndex + 1}.`);
+          const { error } = await supabase.from("experiment_stage_tools").insert({ stage_id: stageId, forming_tool_id: toolId, role: text(`stage_tool_role_${uiIndex}`) || "forming tool" });
           if (error) throw new Error(`Experiment saved, but stage tool link could not be saved: ${error.message}`);
         }
       }
@@ -203,7 +212,8 @@ export default function SubmitPage() {
         if (!observationType && observationFiles.length === 0) continue;
         if (!observationType) throw new Error(`Observation ${index + 1} needs a type before photos can be attached.`);
         const stageIndexText = text(`observation_stage_index_${index}`);
-        const stageId = stageIndexText ? savedStages[Number(stageIndexText)]?.id ?? null : null;
+        const stageId = stageIndexText ? stageIdByUiIndex.get(Number(stageIndexText)) ?? null : null;
+        if (stageIndexText && !stageId) throw new Error(`Observation ${index + 1} is assigned to an empty or unsaved stage.`);
         const { data: observation, error: observationError } = await supabase.from("experiment_observations").insert({
           experiment_id: experiment.id,
           stage_id: stageId,

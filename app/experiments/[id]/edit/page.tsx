@@ -43,7 +43,7 @@ export default function EditExperimentPage({ params }: { params: Promise<{ id: s
     setExperiment(record);
     setMessage("");
     const { data: stageData } = await supabase.from("experiment_stages").select("*").eq("experiment_id", experimentId).order("stage_number", { ascending: true });
-    setStages((stageData ?? []).length ? ((stageData ?? []) as Record<string, string | number | null>[]).map((stage) => Object.fromEntries(stageFields.map((field) => [field, stage[field] == null ? "" : String(stage[field])])) as Stage) : [emptyStage()]);
+    setStages((stageData ?? []).length ? ((stageData ?? []) as Record<string, string | number | null>[]).map((stage) => ({ ...Object.fromEntries(stageFields.map((field) => [field, stage[field] == null ? "" : String(stage[field])])), __id: String(stage.id) }) as Stage) : [emptyStage()]);
     const [materials, products, equipmentRows, tools, sources, experiments, taxonomyRows] = await Promise.all([
       supabase.from("materials").select("id, name").order("name"),
       supabase.from("products").select("id, product_name").order("product_name"),
@@ -84,24 +84,39 @@ export default function EditExperimentPage({ params }: { params: Promise<{ id: s
     });
     const { error } = await supabase.from("experiments").update(payload).eq("id", String(experiment.id));
     if (error) { setMessage(error.message); setBusy(false); return; }
-    const { error: deleteError } = await supabase.from("experiment_stages").delete().eq("experiment_id", String(experiment.id));
-    if (deleteError) { setMessage(deleteError.message); setBusy(false); return; }
-    const rows = stages.filter((stage) => Object.values(stage).some((value) => value.trim())).map((stage, index) => {
+    const preparedStages = stages
+      .map((stage, uiIndex) => ({ stage, uiIndex, existingId: stage.__id || "" }))
+      .filter(({ stage, uiIndex }) => stageFields.some((field) => stage[field]?.trim()) || text(`stage_tool_id_${uiIndex}`));
+    const existingStageIds = stages.map((stage) => stage.__id).filter(Boolean);
+    const retainedStageIds = new Set(preparedStages.map((entry) => entry.existingId).filter(Boolean));
+    const removedStageIds = existingStageIds.filter((stageId) => !retainedStageIds.has(stageId));
+    if (removedStageIds.length) {
+      const { error: deleteError } = await supabase.from("experiment_stages").delete().in("id", removedStageIds);
+      if (deleteError) { setMessage(deleteError.message); setBusy(false); return; }
+    }
+    const stageIdByUiIndex = new Map<number, string>();
+    for (let index = 0; index < preparedStages.length; index++) {
+      const { stage, uiIndex, existingId } = preparedStages[index];
       const row: Record<string, string | number | null> = { experiment_id: String(experiment.id), stage_number: index + 1 };
       stageFields.forEach((field) => { row[field] = numericStageFields.has(field) ? (stage[field] ? Number(stage[field]) : null) : stage[field]; });
       row.title = stage.title || `Stage ${index + 1}`;
-      return row;
-    });
-    let savedStages: { id: string; stage_number: number }[] = [];
-    if (rows.length) {
-      const { data: stageData, error: stageError } = await supabase.from("experiment_stages").insert(rows).select("id, stage_number");
-      if (stageError) { setMessage(stageError.message); setBusy(false); return; }
-      savedStages = (stageData ?? []) as { id: string; stage_number: number }[];
+      const result = existingId
+        ? await supabase.from("experiment_stages").update(row).eq("id", existingId).select("id").single()
+        : await supabase.from("experiment_stages").insert(row).select("id").single();
+      if (result.error || !result.data) {
+        const stageError = result.error;
+        setMessage(stageError?.message ?? `Stage ${index + 1} could not be saved.`);
+        setBusy(false);
+        return;
+      }
+      stageIdByUiIndex.set(uiIndex, String(result.data.id));
     }
-    for (let index = 0; index < savedStages.length; index++) {
-      const toolId = text(`stage_tool_id_${index}`);
+    for (const { uiIndex } of preparedStages) {
+      const toolId = text(`stage_tool_id_${uiIndex}`);
+      const stageId = stageIdByUiIndex.get(uiIndex);
       if (toolId) {
-        const { error: linkError } = await supabase.from("experiment_stage_tools").insert({ stage_id: savedStages[index].id, forming_tool_id: toolId, role: text(`stage_tool_role_${index}`) || "forming tool" });
+        if (!stageId) { setMessage(`Stage tool link could not resolve UI stage ${uiIndex + 1}.`); setBusy(false); return; }
+        const { error: linkError } = await supabase.from("experiment_stage_tools").upsert({ stage_id: stageId, forming_tool_id: toolId, role: text(`stage_tool_role_${uiIndex}`) || "forming tool" }, { onConflict: "stage_id,forming_tool_id,role" });
         if (linkError) { setMessage(linkError.message); setBusy(false); return; }
       }
     }
@@ -125,7 +140,8 @@ export default function EditExperimentPage({ params }: { params: Promise<{ id: s
       if (!observationType && observationFiles.length === 0) continue;
       if (!observationType) { setMessage(`Observation ${index + 1} needs a type before photos can be attached.`); setBusy(false); return; }
       const stageIndexText = text(`observation_stage_index_${index}`);
-      const stageId = stageIndexText ? savedStages[Number(stageIndexText)]?.id ?? null : null;
+      const stageId = stageIndexText ? stageIdByUiIndex.get(Number(stageIndexText)) ?? null : null;
+      if (stageIndexText && !stageId) { setMessage(`Observation ${index + 1} is assigned to an empty or unsaved stage.`); setBusy(false); return; }
       const { data: observation, error: observationError } = await supabase.from("experiment_observations").insert({
         experiment_id: experiment.id,
         stage_id: stageId,
